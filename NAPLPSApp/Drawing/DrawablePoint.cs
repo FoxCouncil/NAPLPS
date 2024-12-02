@@ -44,14 +44,17 @@ public class DrawablePoint : Drawable, IDrawable
             return;
         }
 
-
         var logicalPel = _command.LogicalPel;
         var (width, height) = NaplpsUtils.ConvertNormalizedToScreenScale(size, logicalPel.X, logicalPel.Y);
-        var center = points[0];
-
-        var ellipse = new EllipsePolygon(center.X, center.Y, width > 0 ? width : 1f, height > 0 ? height : 1f);
         var (brush, pen) = GetBrushAndPenFromFillableCommand(size);
 
-        image.Mutate(x => x.Fill(brush, ellipse));
+        image.Mutate(x =>
+        {
+            foreach (var center in points)
+            {
+                var ellipse = new EllipsePolygon(center.X, center.Y, width > 0 ? width : 1f, height > 0 ? height : 1f);
+                x.Fill(brush, ellipse);
+            }
+        });
     }
 }
