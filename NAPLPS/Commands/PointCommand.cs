@@ -1,7 +1,5 @@
 // Copyright (c) 2024 FoxCouncil - https://github.com/FoxCouncil/NAPLPS
 
-using System.Diagnostics;
-
 namespace NAPLPS.Commands;
 
 public abstract class PointCommand : FillableGeometricDrawingCommandBase
