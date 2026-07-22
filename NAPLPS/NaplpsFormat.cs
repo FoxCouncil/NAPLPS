@@ -82,6 +82,19 @@ public partial class NaplpsFormat
     /// - Prodigy: First two bytes are A1 C8 (Domain command in 8-bit mode)
     /// - Standard NAPLPS (709): Everything else
     /// </summary>
+    /// <summary>Peek the next raw byte without UTF-8 decoding (-1 at end of stream).</summary>
+    private static int PeekByte(BinaryReader reader)
+    {
+        if (reader.BaseStream.Position >= reader.BaseStream.Length)
+        {
+            return -1;
+        }
+
+        var b = reader.ReadByte();
+        reader.BaseStream.Position -= 1;
+        return b;
+    }
+
     private static NaplpsSystemType DetectSystemType(BinaryReader reader)
     {
         if (reader.BaseStream.Length < 1)
@@ -1063,13 +1076,15 @@ public partial class NaplpsFormat
         // Capture both bytes into additionalParameters so the serializer re-emits them on ToBytes().
         if (reader.BaseStream.Position + 2 <= reader.BaseStream.Length)
         {
-            var peek1 = reader.PeekChar();
+            // PeekChar() UTF-8-decodes the upcoming bytes and THROWS on a multi-byte lead
+            // (e.g. NSR followed by 0xF0..): peek the raw byte via the stream instead.
+            var peek1 = PeekByte(reader);
 
             if (peek1 >= 0x40 && peek1 <= 0x7F)
             {
                 byte rowByte = reader.ReadByte();
                 additionalParameters.Add(rowByte);
-                int peek2 = reader.PeekChar();
+                int peek2 = PeekByte(reader);
 
                 if (peek2 >= 0x40 && peek2 <= 0x7F)
                 {
