@@ -250,6 +250,38 @@ public static unsafe class NativeExportsCtx
     }
 
     /// <summary>
+    /// Append a solid filled rectangle (TEXTURE solid fill, SELECT COLOR, RECTANGLE SET
+    /// FILLED) at (x, y) lower-left with size (w, h), all rounded to the wire grid -
+    /// the block-cursor / cell-repaint primitive. Executes via exec_next/exec_to like any
+    /// appended bytes. Returns the new total command count, -3 for a non-positive size or
+    /// inside an unfinished definition, or a negative error code.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_fill_rect")]
+    public static int FillRect(nint handle, double x, double y, double w, double h, int color)
+    {
+        var ctx = Get(handle);
+        if (ctx is null) { return ErrBadHandle; }
+        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(w) || !double.IsFinite(h)
+            || w <= 0 || h <= 0)
+        {
+            return ErrInvalid;
+        }
+
+        try
+        {
+            return ctx.Session.FillRect(x, y, w, h, color);
+        }
+        catch (InvalidOperationException)
+        {
+            return ErrInvalid;
+        }
+        catch
+        {
+            return ErrException;
+        }
+    }
+
+    /// <summary>
     /// Refresh and return the pinned RGBA8888 framebuffer pointer (stride = width * 4).
     /// The pointer stays valid for the context's lifetime; contents are coherent only
     /// between the caller's own calls. Returns null on error.

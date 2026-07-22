@@ -178,6 +178,31 @@ NAPLPS_IMPORT int32_t   naplps_ctx_draw_text(NaplpsCtx ctx,
                                              double char_w, double char_h,
                                              const uint8_t* ascii, int32_t len);
 
+/* --- Filled rectangle --- */
+/* Append a solid filled rectangle in the given palette color (0-15, clamped):
+ * TEXTURE (solid fill) -> SELECT COLOR -> RECTANGLE SET FILLED. Position (lower-left)
+ * and size are rounded to the coordinate wire grid; size is floored at one grid step.
+ *
+ * Cell alignment: nominal pitches like 1/40 are NOT grid-representable, so do not
+ * address cells as x + col * 0.025 - that drifts ~1 px per column against a text run.
+ * Quantize first: cw_q = round(cw*256)/256 (6/256 for the 40-column cell), then
+ * cell_x(i) = x_q + i * cw_q. Every such position is exactly grid-representable, and a
+ * rect at the same quantized position/size as a draw_text cell covers it exactly - the
+ * block-cursor / cell-repaint primitive.
+ *
+ * Decoder-state footprint of the emitted commands (affects later RAW appends only;
+ * draw_text/fill_rect always re-establish what they need): texture state becomes
+ * solid fill, solid line, highlight off, zero mask size; color mode becomes 1
+ * (foreground) with the given color; the pen ends at (x + w, y) per the X3.110
+ * rectangle pen advance.
+ *
+ * Returns the new total command count; -3 for a non-positive or non-finite argument
+ * or when the stream ends inside an unfinished definition; or a negative error code. */
+NAPLPS_IMPORT int32_t   naplps_ctx_fill_rect(NaplpsCtx ctx,
+                                             double x, double y,
+                                             double w, double h,
+                                             int32_t color);
+
 /* --- Pixels --- */
 /* Return a pointer to the current RGBA8888 framebuffer (refreshed at call time;
  * opaque black before any append). The pointer stays valid for the lifetime of the

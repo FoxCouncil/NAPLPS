@@ -57,10 +57,22 @@ int main(int argc, char** argv) {
         if (p[0] > 8 || p[1] > 8 || p[2] > 8) { lit++; }
     }
 
+    /* block cursor: one cell filled in green; verify pixels actually change */
+    int32_t fr = naplps_ctx_fill_rect(ctx, 5 * 0.0234375, 0.3, 0.0234375, 0.0390625, 6);
+    if (fr <= c2) { printf("fill_rect failed: %d\n", fr); return 1; }
+    if (naplps_ctx_exec_to(ctx, fr - 1) != fr - 1) { printf("exec_to failed\n"); return 1; }
+    fb = naplps_ctx_framebuffer(ctx, &w, &h, &stride);
+    long green = 0;
+    for (long i = 0; i < (long)w * h; i++) {
+        const uint8_t* p = fb + i * 4;
+        if (p[0] < 60 && p[1] > 120 && p[2] < 60) { green++; }
+    }
+    if (green < 200) { printf("fill_rect painted %ld green px (expected a cell block)\n", green); return 1; }
+
     const char* s = "FIELD TEXT";
     int32_t after = naplps_ctx_draw_text(ctx, 0.1, 0.1, 7, 3, 0.025, 0.0390625,
                                          (const uint8_t*)s, (int32_t)strlen(s));
-    if (after <= c2) { printf("draw_text failed: %d\n", after); return 1; }
+    if (after <= fr) { printf("draw_text failed: %d\n", after); return 1; }
     if (naplps_ctx_exec_to(ctx, after - 1) != after - 1) { printf("exec_to failed\n"); return 1; }
 
     naplps_ctx_reset(ctx);
