@@ -254,6 +254,44 @@ public class DrawContext : IDisposable
     }
 
     /// <summary>
+    /// Fill the canvas with the background (black) without touching decoder or option state.
+    /// Callers that step incrementally use this once per fresh page instead of BeginRender.
+    /// </summary>
+    public void ClearCanvas()
+    {
+        Image.Mutate(ctx => ctx.Fill(ISColor.Black));
+    }
+
+    /// <summary>
+    /// Render exactly one command onto the EXISTING canvas - no clear, no replay. This is the
+    /// incremental path for stateful consumers (the C ABI's exec_next/exec_to): per-render
+    /// display options are re-established each call, and cross-command render state (repeat
+    /// tracking) persists on the instance between steps. The retroactive CLUT re-render that
+    /// <see cref="Render"/> applies for mid-stream palette redefinition is intentionally NOT
+    /// performed here; Prodigy streams are unaffected (fixed hardware palette).
+    /// </summary>
+    public void RenderStep(int commandIndex)
+    {
+        if (commandIndex < 0 || commandIndex >= NAPLPS.Commands.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(commandIndex));
+        }
+
+        Drawable.Options.ColorGunWidth = ColorGunWidth;
+        Drawable.Options.HardText = HardText;
+        Drawable.Options.UseMvdiFont = UseMvdiFont;
+        Drawable.Options.AuthenticGeometry = AuthenticGeometry;
+        NaplpsUtils.DisplayRatio = DisplayRatio;
+        Drawable.LivePalette = NAPLPS.State.ColorMap;
+        Drawable.UseLivePalette = false;
+
+        var seq = NAPLPS.Commands[commandIndex];
+        RenderCommand(seq.Command, seq.State);
+
+        Drawable.LivePalette = null;
+    }
+
+    /// <summary>
     /// Renders a single command. Returns the drawable if one was created (for delay timing).
     /// </summary>
     private IDrawable? RenderCommand(NaplpsCommand command, NaplpsState state)
