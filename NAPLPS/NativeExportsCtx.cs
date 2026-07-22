@@ -1,28 +1,23 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
 using System.Runtime.InteropServices;
-using NAPLPS.Drawing;
 
 namespace NAPLPS;
 
 /// <summary>
-/// Stateful decoder-context C ABI: a persistent handle wrapping a parsed stream plus a
-/// DrawContext and a pinned RGBA8888 framebuffer, so native consumers (the Prodigy
-/// reception-system) can append bytes, step command-by-command, and blit raw pixels
-/// without PNG round-trips. See tools/aot/include/naplps.h for the C declarations.
+/// Stateful decoder-context C ABI: thin [UnmanagedCallersOnly] shims over
+/// <see cref="NaplpsStreamSession"/> plus a pinned RGBA8888 framebuffer, so native
+/// consumers (the Prodigy reception-system) can append bytes, step command-by-command,
+/// and blit raw pixels without PNG round-trips. Semantics live on the session class;
+/// the C contract lives in tools/aot/include/naplps.h.
 ///
-/// Model: the accumulated BYTES are the source of truth. Each append re-parses the whole
-/// buffer (parsing is deterministic, so decoder state - character sets, DRCS, position,
-/// attributes - is identical to an incremental parse, and command indices of previously
-/// painted commands are stable because the stream only grows at its end). Painted pixels
-/// persist on the context's canvas; append then re-establishes them by replaying the
-/// already-executed prefix onto a fresh parse (deterministic, pixel-identical).
-///
-/// Error codes: -1 exception/parse failure, -3 invalid argument, -5 bad handle.
-/// naplps_ctx_exec_next returns -4 when the stream is exhausted (not an error).
+/// Error codes: -1 exception/parse failure (the context is left unchanged - appends are
+/// transactional), -3 invalid argument or invalid state, -5 bad handle.
+/// naplps_ctx_exec_next returns -4 when the stream is exhausted (status, not an error).
 ///
 /// Thread safety: the handle table is locked; a single context must not be used from
-/// multiple threads concurrently.
+/// multiple threads concurrently (one context per thread of use). The framebuffer
+/// pointer is only coherent between the caller's own calls.
 /// </summary>
 public static unsafe class NativeExportsCtx
 {
@@ -32,19 +27,13 @@ public static unsafe class NativeExportsCtx
     private const int Exhausted = -4;
     private const int ErrBadHandle = -5;
 
-    private sealed class Ctx
+    private sealed class Ctx(NaplpsStreamSession session, byte[] framebuffer)
     {
-        public required int Width;
-        public required int Height;
-        public required bool Prodigy;
-        public List<byte> Bytes = [];
-        public NaplpsFormat? Format;
-        public DrawContext? Draw;
-        public int Cursor;                       // commands already painted
-        public byte[] Framebuffer = [];
-        public GCHandle Pin;
+        public NaplpsStreamSession Session { get; } = session;
 
-        public int CommandCount => Format?.Commands.Count ?? 0;
+        public byte[] Framebuffer { get; } = framebuffer;
+
+        public GCHandle Pin;
     }
 
     private static readonly Dictionary<nint, Ctx> _ctxs = new();
@@ -56,6 +45,11 @@ public static unsafe class NativeExportsCtx
         lock (_lock) { return _ctxs.GetValueOrDefault(handle); }
     }
 
+    /// <summary>
+    /// Create a decoder context with a width x height RGBA8888 framebuffer. Flags bit 0
+    /// (NAPLPS_MODE_PRODIGY) forces the Prodigy pipeline. Returns an opaque handle, or 0
+    /// on failure.
+    /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_create")]
     public static nint Create(int width, int height, int flags)
     {
@@ -67,14 +61,13 @@ public static unsafe class NativeExportsCtx
 
         try
         {
-            var ctx = new Ctx
+            var fb = new byte[width * height * 4];
+            var session = new NaplpsStreamSession(width, height, (flags & ModeProdigy) != 0);
+            session.CopyFramebufferTo(fb);   // opaque black from the start
+            var ctx = new Ctx(session, fb)
             {
-                Width = width,
-                Height = height,
-                Prodigy = (flags & ModeProdigy) != 0,
-                Framebuffer = new byte[width * height * 4],
+                Pin = GCHandle.Alloc(fb, GCHandleType.Pinned),
             };
-            ctx.Pin = GCHandle.Alloc(ctx.Framebuffer, GCHandleType.Pinned);
 
             lock (_lock)
             {
@@ -89,6 +82,7 @@ public static unsafe class NativeExportsCtx
         }
     }
 
+    /// <summary>Destroy a context and release its framebuffer. Safe to call twice.</summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_destroy")]
     public static void Destroy(nint handle)
     {
@@ -98,52 +92,43 @@ public static unsafe class NativeExportsCtx
             if (!_ctxs.Remove(handle, out ctx)) { return; }
         }
 
-        ctx.Draw?.Dispose();
+        // A managed exception cannot unwind across the UnmanagedCallersOnly boundary -
+        // it would terminate the host process. Teardown failures are swallowed like
+        // every other entry point's; the handle is already unregistered either way.
+        try
+        {
+            ctx.Session.Dispose();
+        }
+        catch
+        {
+        }
+
         if (ctx.Pin.IsAllocated) { ctx.Pin.Free(); }
     }
 
+    /// <summary>Clear the byte stream, decoder state, and framebuffer for a fresh page.</summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_reset")]
     public static void Reset(nint handle)
     {
         var ctx = Get(handle);
         if (ctx is null) { return; }
 
-        ctx.Bytes.Clear();
-        ctx.Draw?.Dispose();
-        ctx.Draw = null;
-        ctx.Format = null;
-        ctx.Cursor = 0;
-        Array.Clear(ctx.Framebuffer);
-    }
-
-    /// <summary>Re-parse the accumulated bytes and rebuild the canvas up to the cursor.</summary>
-    private static void Reparse(Ctx ctx)
-    {
-        ctx.Format = NaplpsFormat.FromBytes(
-            [.. ctx.Bytes],
-            ctx.Prodigy ? NaplpsSystemType.Prodigy : null);
-
-        ctx.Draw?.Dispose();
-        ctx.Draw = new DrawContext(ctx.Format, new SixLabors.ImageSharp.Size(ctx.Width, ctx.Height));
-        if (ctx.Prodigy)
+        try
         {
-            // Match naplps_render_png_prodigy: the ctor derives gun width / MVDI font /
-            // display ratio from SystemType; authentic geometry is set explicitly.
-            ctx.Draw.AuthenticGeometry = true;
+            ctx.Session.Reset();
+            ctx.Session.CopyFramebufferTo(ctx.Framebuffer);
         }
-
-        ctx.Draw.ClearCanvas();
-        if (ctx.Cursor > ctx.Format.Commands.Count)
+        catch
         {
-            ctx.Cursor = ctx.Format.Commands.Count;
-        }
-
-        for (var i = 0; i < ctx.Cursor && i < ctx.Format.Commands.Count; i++)
-        {
-            ctx.Draw.RenderStep(i);
+            // Reset cannot meaningfully fail; swallow to honor the void contract.
         }
     }
 
+    /// <summary>
+    /// Append bytes to the command stream; parsing and painting continue from current
+    /// state. Transactional: a negative return leaves the context unchanged. Returns the
+    /// new total parsed command count or a negative error code.
+    /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_append")]
     public static int Append(nint handle, byte* bytes, int len)
     {
@@ -155,9 +140,7 @@ public static unsafe class NativeExportsCtx
         {
             var chunk = new byte[len];
             Marshal.Copy((nint)bytes, chunk, 0, len);
-            ctx.Bytes.AddRange(chunk);
-            Reparse(ctx);
-            return ctx.CommandCount;
+            return ctx.Session.Append(chunk);
         }
         catch
         {
@@ -165,62 +148,33 @@ public static unsafe class NativeExportsCtx
         }
     }
 
+    /// <summary>Total parsed command count, or a negative error code.</summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_command_count")]
     public static int CommandCount(nint handle)
     {
         var ctx = Get(handle);
-        return ctx is null ? ErrBadHandle : ctx.CommandCount;
+        return ctx is null ? ErrBadHandle : ctx.Session.CommandCount;
     }
 
+    /// <summary>
+    /// Paint up through (and including) cmd_index, clamped to the stream end. Idempotent
+    /// for already-painted commands. Returns the highest painted index, or a negative
+    /// error code (-3 for a negative cmd_index).
+    /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_exec_to")]
     public static int ExecTo(nint handle, int cmdIndex)
     {
         var ctx = Get(handle);
         if (ctx is null) { return ErrBadHandle; }
-        if (ctx.Draw is null || ctx.Format is null) { return ErrInvalid; }
+        if (cmdIndex < 0) { return ErrInvalid; }
 
         try
         {
-            var target = Math.Min(cmdIndex, ctx.CommandCount - 1);
-            while (ctx.Cursor <= target)
-            {
-                ctx.Draw.RenderStep(ctx.Cursor);
-                ctx.Cursor++;
-            }
-
-            return ctx.Cursor - 1;
+            return ctx.Session.ExecTo(cmdIndex);
         }
-        catch
+        catch (InvalidOperationException)
         {
-            return ErrException;
-        }
-    }
-
-    [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_exec_next")]
-    public static int ExecNext(nint handle, int* outDirty)
-    {
-        var ctx = Get(handle);
-        if (ctx is null) { return ErrBadHandle; }
-        if (ctx.Draw is null || ctx.Format is null) { return ErrInvalid; }
-
-        try
-        {
-            if (ctx.Cursor >= ctx.CommandCount) { return Exhausted; }
-
-            ctx.Draw.RenderStep(ctx.Cursor);
-            var executed = ctx.Cursor;
-            ctx.Cursor++;
-
-            if (outDirty != null)
-            {
-                // v1: report the full canvas; per-command bounds refinement can come later.
-                outDirty[0] = 0;
-                outDirty[1] = 0;
-                outDirty[2] = ctx.Width;
-                outDirty[3] = ctx.Height;
-            }
-
-            return executed;
+            return ErrInvalid;
         }
         catch
         {
@@ -229,12 +183,47 @@ public static unsafe class NativeExportsCtx
     }
 
     /// <summary>
-    /// Append a field-text run built by the library's own command encoder: Point Set
-    /// Absolute, SELECT COLOR (mode-shaped), optional TEXT character size, then the
-    /// text bytes verbatim. Coordinates are normalized unit-screen (y up). bg &lt; 0
-    /// emits the single-operand (foreground-only) SELECT COLOR form; charW/charH &lt; 0
-    /// keeps the current character size. Returns the new total command count; the
-    /// appended commands execute through exec_next/exec_to like any other bytes.
+    /// Execute exactly one command (the next unpainted one). Optionally reports the
+    /// changed rectangle via out_dirty (full canvas in this version). Returns the index
+    /// just executed, -4 when the stream is exhausted, or a negative error code.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_exec_next")]
+    public static int ExecNext(nint handle, int* outDirty)
+    {
+        var ctx = Get(handle);
+        if (ctx is null) { return ErrBadHandle; }
+
+        try
+        {
+            var executed = ctx.Session.ExecNext();
+            if (executed is null) { return Exhausted; }
+
+            if (outDirty != null)
+            {
+                outDirty[0] = 0;
+                outDirty[1] = 0;
+                outDirty[2] = ctx.Session.Width;
+                outDirty[3] = ctx.Session.Height;
+            }
+
+            return executed.Value;
+        }
+        catch (InvalidOperationException)
+        {
+            return ErrInvalid;
+        }
+        catch
+        {
+            return ErrException;
+        }
+    }
+
+    /// <summary>
+    /// Append a field-text run built by the library's own encoder (Point Set Absolute,
+    /// SELECT COLOR, optional TEXT character size, text bytes); execute it via
+    /// exec_next/exec_to like any appended bytes. Returns the new total command count,
+    /// -3 when the stream ends inside an unfinished macro/DRCS/texture definition, or a
+    /// negative error code. See naplps.h for parameter semantics.
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_draw_text")]
     public static int DrawText(nint handle, double x, double y, int fg, int bg,
@@ -246,54 +235,13 @@ public static unsafe class NativeExportsCtx
 
         try
         {
-            var mbv = (int)(ctx.Format?.State.MultiByteValue ?? 3);
-            var prior = NaplpsEncoder.Use7BitMode;
-            NaplpsEncoder.Use7BitMode = ctx.Format?.Is7Bit ?? false;
-            var bytes = new List<byte>();
-            void Add((byte opcode, NaplpsOperands operands) cmd)
-            {
-                bytes.Add(cmd.opcode);
-                bytes.AddRange(cmd.operands);
-            }
-
-            try
-            {
-                Add(NaplpsCommandBuilder.BuildPointSetAbsolute((float)x, (float)y, mbv));
-
-                var f = (byte)Math.Clamp(fg, 0, 15);
-                if (bg >= 0)
-                {
-                    var b = (byte)Math.Clamp(bg, 0, 15);
-                    if (f == b)
-                    {
-                        // The two-operand SELECT COLOR form with IDENTICAL operands changes
-                        // only the background; set an interim background first so the
-                        // foreground lands too.
-                        Add(NaplpsCommandBuilder.BuildSelectColor(f, (byte)(b == 0 ? 7 : 0)));
-                    }
-
-                    Add(NaplpsCommandBuilder.BuildSelectColor(f, b));
-                }
-                else
-                {
-                    Add(NaplpsCommandBuilder.BuildSelectColor(f));
-                }
-
-                if (charW >= 0 && charH >= 0)
-                {
-                    Add(NaplpsCommandBuilder.BuildText((float)charW, (float)charH, multiByteValue: mbv));
-                }
-
-                for (var i = 0; i < len; i++) { bytes.Add(ascii[i]); }
-            }
-            finally
-            {
-                NaplpsEncoder.Use7BitMode = prior;
-            }
-
-            ctx.Bytes.AddRange(bytes);
-            Reparse(ctx);
-            return ctx.CommandCount;
+            var chunk = new byte[len];
+            Marshal.Copy((nint)ascii, chunk, 0, len);
+            return ctx.Session.DrawText(x, y, fg, bg, charW, charH, chunk);
+        }
+        catch (InvalidOperationException)
+        {
+            return ErrInvalid;
         }
         catch
         {
@@ -301,6 +249,11 @@ public static unsafe class NativeExportsCtx
         }
     }
 
+    /// <summary>
+    /// Refresh and return the pinned RGBA8888 framebuffer pointer (stride = width * 4).
+    /// The pointer stays valid for the context's lifetime; contents are coherent only
+    /// between the caller's own calls. Returns null on error.
+    /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_framebuffer")]
     public static byte* Framebuffer(nint handle, int* outW, int* outH, int* outStride)
     {
@@ -309,14 +262,10 @@ public static unsafe class NativeExportsCtx
 
         try
         {
-            if (ctx.Draw is not null)
-            {
-                ctx.Draw.Image.CopyPixelDataTo(ctx.Framebuffer);
-            }
-
-            if (outW != null) { *outW = ctx.Width; }
-            if (outH != null) { *outH = ctx.Height; }
-            if (outStride != null) { *outStride = ctx.Width * 4; }
+            ctx.Session.CopyFramebufferTo(ctx.Framebuffer);
+            if (outW != null) { *outW = ctx.Session.Width; }
+            if (outH != null) { *outH = ctx.Session.Height; }
+            if (outStride != null) { *outStride = ctx.Session.Width * 4; }
             return (byte*)ctx.Pin.AddrOfPinnedObject();
         }
         catch

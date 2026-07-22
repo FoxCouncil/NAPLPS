@@ -132,7 +132,7 @@ A working `PublishAot` example will land here once we have one.
 
 ## Native interop examples (tools/aot/) 🌐
 
-Ten small programs that link against the AOT-published library and render a `.nap` to PNG. Each produces the same 6709-byte PNG (MD5 `9a431be59694112d90d9e33297efbe46`). The library exports four C entry points via `[UnmanagedCallersOnly]`: `naplps_version`, `naplps_command_count`, `naplps_error_count`, `naplps_render_png`.
+Ten small programs that link against the AOT-published library and render a `.nap` to PNG. Each produces the same 6709-byte PNG (MD5 `9a431be59694112d90d9e33297efbe46`). The library exports its C API via `[UnmanagedCallersOnly]`: the stateless `naplps_version`, `naplps_command_count`, `naplps_error_count`, `naplps_render_png`, `naplps_render_png_prodigy`, plus the stateful `naplps_ctx_*` decoder-context family (see `tools/aot/include/naplps.h`).
 
 | Language | Directory | FFI mechanism |
 |---|---|---|

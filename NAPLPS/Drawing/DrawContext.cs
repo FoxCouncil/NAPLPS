@@ -224,15 +224,10 @@ public class DrawContext : IDisposable
 
         // Re-establish per-render display options on this thread right before drawing, so
         // parallel/batch renders of files with different settings do not contaminate.
-        Drawable.Options.ColorGunWidth = ColorGunWidth;
-        Drawable.Options.HardText = HardText;
-        Drawable.Options.UseMvdiFont = UseMvdiFont;
-        Drawable.Options.AuthenticGeometry = AuthenticGeometry;
-        Drawable.Options.Antialias = Antialias;
-        NaplpsUtils.DisplayRatio = DisplayRatio;
+        EstablishRenderOptions();
 
         // Clear canvas (important for loop restarts and re-renders)
-        Image.Mutate(ctx => ctx.Fill(ISColor.Black));
+        ClearCanvas();
 
         // LivePalette holds the final palette for scroll clear and palette animation.
         // UseLivePalette controls whether drawing commands use it:
@@ -266,9 +261,10 @@ public class DrawContext : IDisposable
     /// Render exactly one command onto the EXISTING canvas - no clear, no replay. This is the
     /// incremental path for stateful consumers (the C ABI's exec_next/exec_to): per-render
     /// display options are re-established each call, and cross-command render state (repeat
-    /// tracking) persists on the instance between steps. The retroactive CLUT re-render that
-    /// <see cref="Render"/> applies for mid-stream palette redefinition is intentionally NOT
-    /// performed here; Prodigy streams are unaffected (fixed hardware palette).
+    /// tracking) persists on the instance between steps. Two whole-render behaviors do not
+    /// apply when stepping: the retroactive CLUT re-render for mid-stream palette
+    /// redefinition (Prodigy streams are unaffected - fixed hardware palette), and
+    /// <see cref="PaletteAnimationMode"/>.
     /// </summary>
     public void RenderStep(int commandIndex)
     {
@@ -277,18 +273,31 @@ public class DrawContext : IDisposable
             throw new ArgumentOutOfRangeException(nameof(commandIndex));
         }
 
+        EstablishRenderOptions();
+        Drawable.LivePalette = NAPLPS.State.ColorMap;
+        Drawable.UseLivePalette = false;
+
+        try
+        {
+            var seq = NAPLPS.Commands[commandIndex];
+            RenderCommand(seq.Command, seq.State);
+        }
+        finally
+        {
+            Drawable.LivePalette = null;
+        }
+    }
+
+    /// <summary>Push this context's display options into the thread-static render state.
+    /// Called before every render pass and every step.</summary>
+    private void EstablishRenderOptions()
+    {
         Drawable.Options.ColorGunWidth = ColorGunWidth;
         Drawable.Options.HardText = HardText;
         Drawable.Options.UseMvdiFont = UseMvdiFont;
         Drawable.Options.AuthenticGeometry = AuthenticGeometry;
+        Drawable.Options.Antialias = Antialias;
         NaplpsUtils.DisplayRatio = DisplayRatio;
-        Drawable.LivePalette = NAPLPS.State.ColorMap;
-        Drawable.UseLivePalette = false;
-
-        var seq = NAPLPS.Commands[commandIndex];
-        RenderCommand(seq.Command, seq.State);
-
-        Drawable.LivePalette = null;
     }
 
     /// <summary>

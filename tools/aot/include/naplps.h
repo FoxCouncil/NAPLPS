@@ -7,12 +7,19 @@
  *
  * where <rid> is one of win-x64, linux-x64, osx-x64, osx-arm64, linux-arm64.
  *
- * All functions are thread-safe; each call builds its own internal render state.
+ * Thread safety: the stateless render/query functions below are thread-safe; each
+ * call builds its own internal render state. The naplps_ctx_* context functions are
+ * different: creating/destroying/looking up handles is safe from any thread, but a
+ * given context must not be used from two threads at the same time (one context per
+ * thread of use, or synchronize externally).
  *
- * Error codes (negative return values):
- *   -1  Parse error or exception.
+ * Return codes (negative values):
+ *   -1  Parse error or exception. Context calls are transactional: the context is
+ *       left unchanged.
  *   -2  Output buffer too small. Call again with a larger buffer.
- *   -3  Invalid input (null pointer or non-positive length).
+ *   -3  Invalid input (null pointer, non-positive length, bad argument or state).
+ *   -4  Stream exhausted (naplps_ctx_exec_next only; a status, not an error).
+ *   -5  Bad context handle.
  */
 
 #ifndef NAPLPS_H
@@ -86,19 +93,23 @@ NAPLPS_IMPORT int32_t naplps_version(uint8_t* out_buf, int32_t out_buf_len);
  * Model: appended bytes accumulate as the source of truth; decoder state (character
  * sets, DRCS glyph definitions, position, attributes) carries across appends, so
  * "define character sets, then draw field text with them" works across calls.
- * Painted pixels persist; exec steps are idempotent with respect to already-painted
- * commands.
+ * Appends are transactional (failure leaves the context unchanged). Each append
+ * re-parses the accumulated stream and re-establishes the painted prefix, so append
+ * cost grows with total stream size; batch appends where convenient.
  *
- * Additional error codes for context calls:
- *   -4  Stream exhausted (naplps_ctx_exec_next only; not an error).
- *   -5  Bad handle.
+ * Chunks may split anywhere, including mid-command. A chunk that ends mid-command
+ * paints that command from its truncated operands if executed; the completing append
+ * repaints it correctly. In other words: pixels are exact once the appended bytes
+ * form a complete stream, but a blit taken between a mid-command append and its
+ * completion can show a transient partial stroke. Callers that append complete
+ * streams (the recommended model) never observe this.
  *
  * Caveat: mid-stream palette redefinition (generic NAPLPS CLUT animation) is applied
  * retroactively by the one-shot PNG renders but NOT by stepped execution. Prodigy
  * mode is unaffected (fixed hardware palette).
  *
- * Thread safety: the handle table is internally locked, but a single context must
- * not be used from multiple threads concurrently.
+ * Thread safety: see the top of this header - one context per thread of use. The
+ * framebuffer pointer is only coherent between the caller's own calls.
  */
 
 /* Opaque handle to a stateful decoder + its framebuffer. NULL/0 on failure. */
@@ -124,14 +135,17 @@ NAPLPS_IMPORT void      naplps_ctx_reset(NaplpsCtx ctx);
 /* --- Feed --- */
 /* Append bytes to the command stream. Does not reset drawing state or the
  * framebuffer: parsing and painting continue from the current state. Byte chunks
- * may split anywhere, including mid-command. Returns the new total parsed command
- * count, or a negative error code. */
+ * may split anywhere, including mid-command (see the section comment for the
+ * transient-repaint consequence). Transactional: a negative return leaves the
+ * context unchanged. Returns the new total parsed command count, or a negative
+ * error code. */
 NAPLPS_IMPORT int32_t   naplps_ctx_append(NaplpsCtx ctx, const uint8_t* bytes, int32_t len);
 NAPLPS_IMPORT int32_t   naplps_ctx_command_count(NaplpsCtx ctx);
 
 /* --- Execute / step --- */
-/* Paint the framebuffer up through (and including) cmd_index. Idempotent for
- * already-painted commands. Returns the highest painted index, or negative error. */
+/* Paint the framebuffer up through (and including) cmd_index, clamped to the
+ * stream end. Idempotent for already-painted commands. Returns the highest painted
+ * index, -3 for a negative cmd_index, or a negative error code. */
 NAPLPS_IMPORT int32_t   naplps_ctx_exec_to(NaplpsCtx ctx, int32_t cmd_index);
 
 /* Execute exactly one command (the next unpainted one). Optionally reports the
@@ -145,12 +159,19 @@ NAPLPS_IMPORT int32_t   naplps_ctx_exec_next(NaplpsCtx ctx, NaplpsRect* out_dirt
  * Point Set Absolute -> SELECT COLOR -> (optional TEXT character size) -> text bytes.
  * Executable via exec_next/exec_to like any appended bytes.
  *   x, y            normalized unit-screen coordinates (y up; Prodigy visible area
- *                   is y in [0, 0.78125], one 40x20 text cell = 0.025 x 0.0390625)
- *   fg, bg          4-bit Prodigy CLUT indices; bg < 0 emits foreground-only form
- *   char_w, char_h  character field size in normalized units; < 0 keeps current size
+ *                   is y in [0, 0.78125], one 40x20 text cell = 0.025 x 0.0390625).
+ *                   Rounded to the coordinate wire grid (1/256 at the default
+ *                   precision).
+ *   fg, bg          palette indices 0-15 (clamped); bg < 0 emits the foreground-only
+ *                   SELECT COLOR form
+ *   char_w, char_h  character field size in normalized units, rounded to the wire
+ *                   grid; < 0 keeps the current size. Passing a size also resets the
+ *                   TEXT attributes (spacing/path/rotation/interrow) to defaults.
  *   ascii           text bytes appended verbatim (0x20-0x7E; codes with DRCS
  *                   definitions render the custom glyphs)
- * Returns the new total command count, or a negative error code. */
+ * Returns the new total command count; -3 when the stream currently ends inside an
+ * unfinished macro/DRCS/texture definition (the bytes would be swallowed into the
+ * definition); or a negative error code. */
 NAPLPS_IMPORT int32_t   naplps_ctx_draw_text(NaplpsCtx ctx,
                                              double x, double y,
                                              int32_t fg, int32_t bg,
@@ -158,8 +179,10 @@ NAPLPS_IMPORT int32_t   naplps_ctx_draw_text(NaplpsCtx ctx,
                                              const uint8_t* ascii, int32_t len);
 
 /* --- Pixels --- */
-/* Return a pointer to the current RGBA8888 framebuffer (refreshed at call time).
- * The pointer stays valid for the lifetime of the context. Returns NULL on error. */
+/* Return a pointer to the current RGBA8888 framebuffer (refreshed at call time;
+ * opaque black before any append). The pointer stays valid for the lifetime of the
+ * context; contents are coherent only between the caller's own calls. Returns NULL
+ * on error. */
 NAPLPS_IMPORT const uint8_t* naplps_ctx_framebuffer(NaplpsCtx ctx,
                                                     int32_t* out_w, int32_t* out_h,
                                                     int32_t* out_stride);
