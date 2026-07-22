@@ -282,7 +282,7 @@ Stateful decoder contexts (`naplps_ctx_*`): an opaque handle owning a persistent
 
 | Symbol | Purpose |
 |---|---|
-| `naplps_ctx_create(w, h, flags)` / `naplps_ctx_destroy(ctx)` | Lifecycle; flags bit 0 = Prodigy pipeline |
+| `naplps_ctx_create(w, h, flags)` / `naplps_ctx_destroy(ctx)` | Lifecycle; flags: bit 0 = Prodigy pipeline, bit 1 = transparent background (window overlays) |
 | `naplps_ctx_reset(ctx)` | Fresh page: clears bytes, decoder state, framebuffer |
 | `naplps_ctx_append(ctx, bytes, len)` | Append stream bytes (transactional); returns command count |
 | `naplps_ctx_command_count(ctx)` | Parsed command count |

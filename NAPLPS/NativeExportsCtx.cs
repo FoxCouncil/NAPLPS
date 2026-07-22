@@ -22,6 +22,7 @@ namespace NAPLPS;
 public static unsafe class NativeExportsCtx
 {
     private const int ModeProdigy = 0x0001;
+    private const int ModeTransparent = 0x0002;
     private const int ErrException = -1;
     private const int ErrInvalid = -3;
     private const int Exhausted = -4;
@@ -47,8 +48,9 @@ public static unsafe class NativeExportsCtx
 
     /// <summary>
     /// Create a decoder context with a width x height RGBA8888 framebuffer. Flags bit 0
-    /// (NAPLPS_MODE_PRODIGY) forces the Prodigy pipeline. Returns an opaque handle, or 0
-    /// on failure.
+    /// (NAPLPS_MODE_PRODIGY) forces the Prodigy pipeline; bit 1 (NAPLPS_MODE_TRANSPARENT)
+    /// clears the canvas to fully transparent so only painted pixels carry alpha - the
+    /// window-overlay compositing model. Returns an opaque handle, or 0 on failure.
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_create")]
     public static nint Create(int width, int height, int flags)
@@ -62,8 +64,10 @@ public static unsafe class NativeExportsCtx
         try
         {
             var fb = new byte[width * height * 4];
-            var session = new NaplpsStreamSession(width, height, (flags & ModeProdigy) != 0);
-            session.CopyFramebufferTo(fb);   // opaque black from the start
+            var session = new NaplpsStreamSession(width, height,
+                (flags & ModeProdigy) != 0,
+                (flags & ModeTransparent) != 0);
+            session.CopyFramebufferTo(fb);   // the mode's clear color from the start
             var ctx = new Ctx(session, fb)
             {
                 Pin = GCHandle.Alloc(fb, GCHandleType.Pinned),

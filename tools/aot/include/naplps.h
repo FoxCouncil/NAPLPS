@@ -116,7 +116,14 @@ NAPLPS_IMPORT int32_t naplps_version(uint8_t* out_buf, int32_t out_buf_len);
 typedef intptr_t NaplpsCtx;
 
 /* Flags for naplps_ctx_create. */
-#define NAPLPS_MODE_PRODIGY  0x0001  /* 2-bit color guns, MVDI font, Prodigy aspect */
+#define NAPLPS_MODE_PRODIGY      0x0001  /* 2-bit color guns, MVDI font, Prodigy aspect */
+#define NAPLPS_MODE_TRANSPARENT  0x0002  /* clear to (0,0,0,0); painted pixels get alpha
+                                          * 255 - the window-overlay model: composite the
+                                          * context by alpha and the page below shows
+                                          * through everything the stream did not paint.
+                                          * Replay-safe (replays repaint over the same
+                                          * transparent base). A window wanting an opaque
+                                          * backdrop draws a filled rectangle. */
 
 /* Sentinel returned by naplps_ctx_exec_next when all commands are painted. */
 #define NAPLPS_CTX_EXHAUSTED (-4)
@@ -205,7 +212,8 @@ NAPLPS_IMPORT int32_t   naplps_ctx_fill_rect(NaplpsCtx ctx,
 
 /* --- Pixels --- */
 /* Return a pointer to the current RGBA8888 framebuffer (refreshed at call time;
- * opaque black before any append). The pointer stays valid for the lifetime of the
+ * opaque black before any append - fully transparent instead when the context was
+ * created with NAPLPS_MODE_TRANSPARENT). The pointer stays valid for the lifetime of the
  * context; contents are coherent only between the caller's own calls. Returns NULL
  * on error. */
 NAPLPS_IMPORT const uint8_t* naplps_ctx_framebuffer(NaplpsCtx ctx,

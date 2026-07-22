@@ -254,7 +254,14 @@ public class DrawContext : IDisposable
     /// </summary>
     public void ClearCanvas()
     {
-        Image.Mutate(ctx => ctx.Fill(ISColor.Black));
+        ClearCanvas(ISColor.Black);
+    }
+
+    /// <summary>Fill the canvas with an arbitrary background - e.g. transparent for
+    /// window-overlay contexts where unpainted pixels must not occlude the page below.</summary>
+    public void ClearCanvas(ISColor background)
+    {
+        Image.Mutate(ctx => ctx.Fill(background));
     }
 
     /// <summary>

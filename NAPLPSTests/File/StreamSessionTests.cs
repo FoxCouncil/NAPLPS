@@ -197,6 +197,70 @@ public class StreamSessionTests
         Assert.AreNotEqual(3.0 / 40, rect.StartPoint.X, "off-grid x should have been quantized");
     }
 
+    /// <summary>Transparent-background sessions are the window-overlay model: unpainted
+    /// pixels stay (0,0,0,0), painted pixels are opaque, and the property survives an
+    /// append-triggered replay (the base is the clear color, not seeded pixels).</summary>
+    [TestMethod]
+    public void TransparentBackground_OnlyPaintedPixelsCarryAlpha()
+    {
+        using var win = new NaplpsStreamSession(W, H, prodigy: true, transparentBackground: true);
+
+        // Before any append: fully transparent.
+        var buf = new byte[W * H * 4];
+        win.CopyFramebufferTo(buf);
+        Assert.AreEqual(0, buf[3], "pre-append framebuffer must be transparent");
+
+        // Window-style content: a small filled box and a text run; most of the canvas untouched.
+        var n1 = win.FillRect(0.1, 0.1, 0.2, 0.05, color: 4);
+        win.ExecTo(n1 - 1);
+
+        // Append MORE content afterward - the replay must keep the transparent base.
+        var n2 = win.DrawText(0.12, 0.115, fg: 0, bg: -1, 0.025, 0.0390625, "OK"u8.ToArray());
+        win.ExecTo(n2 - 1);
+
+        win.CopyFramebufferTo(buf);
+        long opaque = 0, transparent = 0, other = 0;
+        for (var i = 0; i < buf.Length; i += 4)
+        {
+            switch (buf[i + 3])
+            {
+                case 255: opaque++; break;
+                case 0: transparent++; break;
+                default: other++; break;
+            }
+        }
+
+        Assert.AreEqual(0, other, "alpha must be binary in Prodigy (hard-edge) mode");
+        Assert.IsTrue(opaque > 2000, $"painted region missing ({opaque} opaque px)");
+        Assert.IsTrue(transparent > W * H * 9 / 10, "untouched canvas must stay transparent");
+
+        // Composite over a 'page' by alpha, the way a host would: the page must show
+        // through every pixel the window did not paint, and the window must win where
+        // it did.
+        var page = new byte[W * H * 4];
+        for (var i = 0; i < page.Length; i += 4) { page[i] = 1; page[i + 1] = 2; page[i + 2] = 3; page[i + 3] = 255; }
+
+        long pageThrough = 0, windowWins = 0;
+        for (var i = 0; i < buf.Length; i += 4)
+        {
+            if (buf[i + 3] == 0)
+            {
+                pageThrough++;
+                Assert.AreEqual(1, page[i], "alpha-0 window pixel must leave the page pixel");
+            }
+            else
+            {
+                windowWins++;
+            }
+        }
+
+        Assert.IsTrue(pageThrough > W * H * 9 / 10, "the page must show through the unpainted window");
+        Assert.IsTrue(windowWins > 2000, "the window must win where it painted");
+
+        var corner = ((H - 5) * W + 5) * 4;   // far from the box: must remain a page pixel
+        Assert.AreEqual(0, buf[corner + 3], "corner should be a transparent window pixel");
+    }
+
     /// <summary>Non-finite geometry must be rejected, not encoded as a degenerate rect.</summary>
     [TestMethod]
     public void FillRect_RejectsNonFiniteArguments()
