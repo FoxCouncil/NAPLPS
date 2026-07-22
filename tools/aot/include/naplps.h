@@ -140,6 +140,23 @@ NAPLPS_IMPORT int32_t   naplps_ctx_exec_to(NaplpsCtx ctx, int32_t cmd_index);
  * painted, or a negative error. */
 NAPLPS_IMPORT int32_t   naplps_ctx_exec_next(NaplpsCtx ctx, NaplpsRect* out_dirty);
 
+/* --- Field text --- */
+/* Append a field-text run built by the library's own NAPLPS encoder:
+ * Point Set Absolute -> SELECT COLOR -> (optional TEXT character size) -> text bytes.
+ * Executable via exec_next/exec_to like any appended bytes.
+ *   x, y            normalized unit-screen coordinates (y up; Prodigy visible area
+ *                   is y in [0, 0.78125], one 40x20 text cell = 0.025 x 0.0390625)
+ *   fg, bg          4-bit Prodigy CLUT indices; bg < 0 emits foreground-only form
+ *   char_w, char_h  character field size in normalized units; < 0 keeps current size
+ *   ascii           text bytes appended verbatim (0x20-0x7E; codes with DRCS
+ *                   definitions render the custom glyphs)
+ * Returns the new total command count, or a negative error code. */
+NAPLPS_IMPORT int32_t   naplps_ctx_draw_text(NaplpsCtx ctx,
+                                             double x, double y,
+                                             int32_t fg, int32_t bg,
+                                             double char_w, double char_h,
+                                             const uint8_t* ascii, int32_t len);
+
 /* --- Pixels --- */
 /* Return a pointer to the current RGBA8888 framebuffer (refreshed at call time).
  * The pointer stays valid for the lifetime of the context. Returns NULL on error. */

@@ -228,6 +228,79 @@ public static unsafe class NativeExportsCtx
         }
     }
 
+    /// <summary>
+    /// Append a field-text run built by the library's own command encoder: Point Set
+    /// Absolute, SELECT COLOR (mode-shaped), optional TEXT character size, then the
+    /// text bytes verbatim. Coordinates are normalized unit-screen (y up). bg &lt; 0
+    /// emits the single-operand (foreground-only) SELECT COLOR form; charW/charH &lt; 0
+    /// keeps the current character size. Returns the new total command count; the
+    /// appended commands execute through exec_next/exec_to like any other bytes.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_draw_text")]
+    public static int DrawText(nint handle, double x, double y, int fg, int bg,
+        double charW, double charH, byte* ascii, int len)
+    {
+        var ctx = Get(handle);
+        if (ctx is null) { return ErrBadHandle; }
+        if (ascii == null || len <= 0) { return ErrInvalid; }
+
+        try
+        {
+            var mbv = (int)(ctx.Format?.State.MultiByteValue ?? 3);
+            var prior = NaplpsEncoder.Use7BitMode;
+            NaplpsEncoder.Use7BitMode = ctx.Format?.Is7Bit ?? false;
+            var bytes = new List<byte>();
+            void Add((byte opcode, NaplpsOperands operands) cmd)
+            {
+                bytes.Add(cmd.opcode);
+                bytes.AddRange(cmd.operands);
+            }
+
+            try
+            {
+                Add(NaplpsCommandBuilder.BuildPointSetAbsolute((float)x, (float)y, mbv));
+
+                var f = (byte)Math.Clamp(fg, 0, 15);
+                if (bg >= 0)
+                {
+                    var b = (byte)Math.Clamp(bg, 0, 15);
+                    if (f == b)
+                    {
+                        // The two-operand SELECT COLOR form with IDENTICAL operands changes
+                        // only the background; set an interim background first so the
+                        // foreground lands too.
+                        Add(NaplpsCommandBuilder.BuildSelectColor(f, (byte)(b == 0 ? 7 : 0)));
+                    }
+
+                    Add(NaplpsCommandBuilder.BuildSelectColor(f, b));
+                }
+                else
+                {
+                    Add(NaplpsCommandBuilder.BuildSelectColor(f));
+                }
+
+                if (charW >= 0 && charH >= 0)
+                {
+                    Add(NaplpsCommandBuilder.BuildText((float)charW, (float)charH, multiByteValue: mbv));
+                }
+
+                for (var i = 0; i < len; i++) { bytes.Add(ascii[i]); }
+            }
+            finally
+            {
+                NaplpsEncoder.Use7BitMode = prior;
+            }
+
+            ctx.Bytes.AddRange(bytes);
+            Reparse(ctx);
+            return ctx.CommandCount;
+        }
+        catch
+        {
+            return ErrException;
+        }
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_framebuffer")]
     public static byte* Framebuffer(nint handle, int* outW, int* outH, int* outStride)
     {
