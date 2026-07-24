@@ -33,6 +33,20 @@ else
   echo "warning: no signing identity (set CODESIGN_ID); ad-hoc signing - Quick Look will not load the extensions" >&2
 fi
 
+# Mac App Store mode (MAS=1): distribution signing with sandbox entitlements and embedded
+# provisioning profiles. Signing details: macos/README.md.
+MAS="${MAS:-0}"
+if [ "$MAS" = "1" ]; then
+  : "${TEAM_ID:?MAS=1 requires TEAM_ID (Apple Developer Team ID)}"
+  : "${MAS_PROFILE_APP:?MAS=1 requires MAS_PROFILE_APP (path to the main app Mac App Store provisioning profile)}"
+  : "${MAS_PROFILE_QUICKLOOK:?MAS=1 requires MAS_PROFILE_QUICKLOOK (thumbnail extension profile)}"
+  : "${MAS_PROFILE_PREVIEW:?MAS=1 requires MAS_PROFILE_PREVIEW (preview extension profile)}"
+  if [ "$SIGN_ID" = "-" ]; then
+    echo "error: MAS=1 needs a real identity - set CODESIGN_ID to your 'Apple Distribution: ...' identity" >&2
+    exit 1
+  fi
+fi
+
 # Bundle version comes from the library csproj so it cannot drift from the code.
 VERSION="$(sed -n 's/.*<InformationalVersion>\([^<]*\).*/\1/p' "$ROOT/NAPLPS/NAPLPS.csproj" | head -1)"
 VERSION="${VERSION:-0.0.0}"
@@ -84,6 +98,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
+  <!-- App Store submission requirements: a primary category, a platform declaration, and the
+       encryption-exemption answer (no non-exempt crypto) so uploads skip the compliance prompt. -->
+  <key>LSApplicationCategoryType</key><string>public.app-category.graphics-design</string>
+  <key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
+  <key>ITSAppUsesNonExemptEncryption</key><false/>
   <!-- com.foxcouncil.naplps is the one canonical identifier for NAPLPS pictures; other heads and
        platforms import the same id so .nap binds identically everywhere. Deliberately NOT
        conforming to public.image - that would let bitmap editors claim .nap; the Quick Look
@@ -111,18 +130,73 @@ PLIST
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" \
                         -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 
+# App Store uploads require a unique, increasing CFBundleVersion per build (CI passes the run
+# number), and every extension must carry the same CFBundleVersion as the containing app.
+if [ -n "${BUILD_NUMBER:-}" ]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/PlugIns/NAPLPSQuickLook.appex/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/PlugIns/NAPLPSPreview.appex/Contents/Info.plist"
+fi
+
 chmod +x "$APP/Contents/MacOS/NAPLPSApp"
-# The app is a .NET (CoreCLR) app: it JITs, so it must be signed WITHOUT the hardened runtime -
-# hardened runtime blocks executable-memory allocation and the app would die instantly at launch.
-# So: (1) deep-sign the whole app un-hardened (payload + a first pass over the extensions), then
-# (2) re-sign each embedded extension WITH hardened runtime + sandbox entitlements (required for the
-# Quick Look host to load it, fine since NativeAOT/no JIT), then (3) re-seal the app top-level.
-codesign --force --deep --sign "$SIGN_ID" "$APP" 2>&1 | tail -1
-for EXT in "$APP/Contents/PlugIns/NAPLPSQuickLook.appex" "$APP/Contents/PlugIns/NAPLPSPreview.appex"; do
-  codesign --force --options runtime --sign "$SIGN_ID" "$EXT/Contents/Frameworks/libNAPLPS.dylib" 2>&1 | tail -1
-  codesign --force --options runtime --sign "$SIGN_ID" --entitlements "$HERE/quicklook/NAPLPSQuickLook.entitlements" "$EXT" 2>&1 | tail -1
-done
-codesign --force --sign "$SIGN_ID" "$APP" 2>&1 | tail -1
+if [ "$MAS" = "1" ]; then
+  # -- Mac App Store distribution signing --
+  # App Sandbox is mandatory for store apps; hardened runtime is not, and stays OFF for the
+  # CoreCLR payload (it JITs - see the dev-signing comment below). allow-jit is included so a
+  # future hardened-runtime requirement doesn't brick the build. Every bundle carries its
+  # Team-ID-scoped application-identifier because App Store validation cross-checks the
+  # codesign entitlements against the embedded provisioning profiles.
+  ENT="$(mktemp -d)"
+  write_entitlements() { # <out-file> <bundle-id> <file-access> [jit]
+    cat > "$1" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.app-sandbox</key><true/>
+  <key>com.apple.security.$3</key><true/>
+  <key>com.apple.application-identifier</key><string>$TEAM_ID.$2</string>
+  <key>com.apple.developer.team-identifier</key><string>$TEAM_ID</string>
+EOF
+    if [ "${4:-}" = "jit" ]; then
+      echo '  <key>com.apple.security.cs.allow-jit</key><true/>' >> "$1"
+    fi
+    printf '</dict></plist>\n' >> "$1"
+  }
+  write_entitlements "$ENT/app.entitlements"       com.foxcouncil.naplps           files.user-selected.read-write jit
+  write_entitlements "$ENT/quicklook.entitlements" com.foxcouncil.naplps.quicklook files.user-selected.read-only
+  write_entitlements "$ENT/preview.entitlements"   com.foxcouncil.naplps.preview   files.user-selected.read-only
+
+  # createdump is the .NET crash-dump helper: an extra unsandboxed executable that App Store
+  # validation rejects. A store build has no use for it.
+  rm -f "$APP/Contents/MacOS/createdump"
+
+  cp "$MAS_PROFILE_APP"       "$APP/Contents/embedded.provisionprofile"
+  cp "$MAS_PROFILE_QUICKLOOK" "$APP/Contents/PlugIns/NAPLPSQuickLook.appex/Contents/embedded.provisionprofile"
+  cp "$MAS_PROFILE_PREVIEW"   "$APP/Contents/PlugIns/NAPLPSPreview.appex/Contents/embedded.provisionprofile"
+
+  # (1) deep pass signs every dylib in the payload, (2) each extension re-signed with hardened
+  # runtime + its own sandbox/team entitlements, (3) top-level seal carries the app entitlements.
+  codesign --force --deep --sign "$SIGN_ID" "$APP" 2>&1 | tail -1
+  codesign --force --options runtime --sign "$SIGN_ID" "$APP/Contents/PlugIns/NAPLPSQuickLook.appex/Contents/Frameworks/libNAPLPS.dylib" 2>&1 | tail -1
+  codesign --force --options runtime --sign "$SIGN_ID" --entitlements "$ENT/quicklook.entitlements" "$APP/Contents/PlugIns/NAPLPSQuickLook.appex" 2>&1 | tail -1
+  codesign --force --options runtime --sign "$SIGN_ID" "$APP/Contents/PlugIns/NAPLPSPreview.appex/Contents/Frameworks/libNAPLPS.dylib" 2>&1 | tail -1
+  codesign --force --options runtime --sign "$SIGN_ID" --entitlements "$ENT/preview.entitlements" "$APP/Contents/PlugIns/NAPLPSPreview.appex" 2>&1 | tail -1
+  codesign --force --sign "$SIGN_ID" --entitlements "$ENT/app.entitlements" "$APP" 2>&1 | tail -1
+  rm -rf "$ENT"
+else
+  # -- Development / ad-hoc signing --
+  # The app is a .NET (CoreCLR) app: it JITs, so it must be signed WITHOUT the hardened runtime -
+  # hardened runtime blocks executable-memory allocation and the app would die instantly at launch.
+  # So: (1) deep-sign the whole app un-hardened (payload + a first pass over the extensions), then
+  # (2) re-sign each embedded extension WITH hardened runtime + sandbox entitlements (required for the
+  # Quick Look host to load it, fine since NativeAOT/no JIT), then (3) re-seal the app top-level.
+  codesign --force --deep --sign "$SIGN_ID" "$APP" 2>&1 | tail -1
+  for EXT in "$APP/Contents/PlugIns/NAPLPSQuickLook.appex" "$APP/Contents/PlugIns/NAPLPSPreview.appex"; do
+    codesign --force --options runtime --sign "$SIGN_ID" "$EXT/Contents/Frameworks/libNAPLPS.dylib" 2>&1 | tail -1
+    codesign --force --options runtime --sign "$SIGN_ID" --entitlements "$HERE/quicklook/NAPLPSQuickLook.entitlements" "$EXT" 2>&1 | tail -1
+  done
+  codesign --force --sign "$SIGN_ID" "$APP" 2>&1 | tail -1
+fi
 codesign --verify --verbose=1 "$APP" 2>&1 | tail -1
 rm -rf "$PUB"
 echo "built: $APP"

@@ -1,0 +1,123 @@
+# macOS app build + Mac App Store delivery.
+#
+# push / pull_request  -> ad-hoc build on a macos-15 runner: compile validation of the app,
+#                         the NativeAOT renderer dylib, and both Quick Look extensions. No
+#                         secrets are used or available on these runs.
+# workflow_dispatch    -> distribution build gated by the "appstore" environment (configure
+#                         it with a required reviewer so every run needs a human approval
+#                         before any secret is released): signs with Apple Distribution,
+#                         packages the installer pkg, and uploads to TestFlight.
+#
+# All actions are first-party and SHA-pinned. The appstore environment provides the
+# certificate, profile, and App Store Connect API key secrets referenced below.
+name: macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: Upload to TestFlight
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (ad-hoc)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Build app bundle
+        run: bash macos/build-app.sh "$RUNNER_TEMP/NAPLPS.app"
+      - name: Zip bundle
+        run: ditto -c -k --keepParent "$RUNNER_TEMP/NAPLPS.app" "$RUNNER_TEMP/NAPLPS-app-adhoc.zip"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: NAPLPS-app-adhoc
+          path: ${{ runner.temp }}/NAPLPS-app-adhoc.zip
+
+  appstore:
+    name: App Store (TestFlight)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    environment: appstore
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      # Ephemeral keychain: created fresh, populated from secrets, destroyed with the VM.
+      # The p12 files are deleted the moment they are imported.
+      - name: Import distribution certificates
+        env:
+          MAC_DIST_CERT_P12: ${{ secrets.MAC_DIST_CERT_P12 }}
+          MAC_DIST_CERT_PASSWORD: ${{ secrets.MAC_DIST_CERT_PASSWORD }}
+          MAC_INSTALLER_CERT_P12: ${{ secrets.MAC_INSTALLER_CERT_P12 }}
+          MAC_INSTALLER_CERT_PASSWORD: ${{ secrets.MAC_INSTALLER_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$MAC_DIST_CERT_P12" | base64 -d > "$RUNNER_TEMP/dist.p12"
+          printf '%s' "$MAC_INSTALLER_CERT_P12" | base64 -d > "$RUNNER_TEMP/installer.p12"
+          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" -P "$MAC_DIST_CERT_PASSWORD" -T /usr/bin/codesign
+          security import "$RUNNER_TEMP/installer.p12" -k "$KEYCHAIN" -P "$MAC_INSTALLER_CERT_PASSWORD" -T /usr/bin/productbuild
+          rm -f "$RUNNER_TEMP/dist.p12" "$RUNNER_TEMP/installer.p12"
+          security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+
+      - name: Install provisioning profiles
+        env:
+          MAS_PROFILE_APP_B64: ${{ secrets.MAS_PROFILE_APP }}
+          MAS_PROFILE_QUICKLOOK_B64: ${{ secrets.MAS_PROFILE_QUICKLOOK }}
+          MAS_PROFILE_PREVIEW_B64: ${{ secrets.MAS_PROFILE_PREVIEW }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/profiles"
+          printf '%s' "$MAS_PROFILE_APP_B64" | base64 -d > "$RUNNER_TEMP/profiles/app.provisionprofile"
+          printf '%s' "$MAS_PROFILE_QUICKLOOK_B64" | base64 -d > "$RUNNER_TEMP/profiles/quicklook.provisionprofile"
+          printf '%s' "$MAS_PROFILE_PREVIEW_B64" | base64 -d > "$RUNNER_TEMP/profiles/preview.provisionprofile"
+
+      - name: Build signed app + installer pkg
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MAS_PROFILE_APP: ${{ runner.temp }}/profiles/app.provisionprofile
+          MAS_PROFILE_QUICKLOOK: ${{ runner.temp }}/profiles/quicklook.provisionprofile
+          MAS_PROFILE_PREVIEW: ${{ runner.temp }}/profiles/preview.provisionprofile
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: bash macos/build-appstore.sh "$RUNNER_TEMP/out"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: NAPLPS-appstore-pkg
+          path: ${{ runner.temp }}/out/NAPLPS.pkg
+
+      # The App Store Connect API key replaces any Apple ID credential: no account password
+      # or 2FA material ever reaches CI, and the key can be role- and app-scoped in ASC.
+      - name: Upload to TestFlight
+        if: ${{ inputs.upload }}
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          jq -n --arg kid "$ASC_KEY_ID" --arg iss "$ASC_ISSUER_ID" --arg key "$(printf '%s' "$ASC_KEY_P8" | base64 -d)" \
+            '{key_id: $kid, issuer_id: $iss, key: $key, in_house: false}' > "$RUNNER_TEMP/asc.json"
+          fastlane pilot upload \
+            --api_key_path "$RUNNER_TEMP/asc.json" \
+            --pkg "$RUNNER_TEMP/out/NAPLPS.pkg" \
+            --app_platform osx \
+            --app_identifier com.foxcouncil.naplps \
+            --skip_waiting_for_build_processing
+          rm -f "$RUNNER_TEMP/asc.json"

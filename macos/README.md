@@ -62,8 +62,40 @@ qlmanage -r && qlmanage -r cache     # reset Quick Look after a rebuild
 
 ## CI notes
 
-The build is runnable on a GitHub Actions `macos-15` runner: `actions/setup-dotnet` (10.x),
-Xcode preinstalled, then `./macos/build-app.sh build/NAPLPS.app`. Without a signing secret the
-build is ad-hoc (compile validation only - extensions will not load in a GUI-less runner
-anyway). To produce a distributable, import a signing certificate into the runner keychain and
-set `CODESIGN_ID`.
+`.github/workflows/macos.yml` builds on every push/PR using a `macos-15` runner: ad-hoc
+signing, compile validation only (extensions will not load in a GUI-less runner anyway), app
+bundle uploaded as an artifact. No secrets are used on these runs.
+
+## Mac App Store
+
+`workflow_dispatch` on the same workflow runs the distribution pipeline: `build-appstore.sh`
+signs the app in MAS mode (App Sandbox entitlements on every bundle, embedded provisioning
+profiles, Apple Distribution identity), wraps it in a signed installer pkg, and uploads it to
+TestFlight via the App Store Connect API.
+
+MAS-mode signing differs from dev signing in three ways: the main app gains sandbox +
+`allow-jit` + Team-ID entitlements (still no hardened runtime - CoreCLR JITs), each extension
+gains Team-ID entitlements and drops `disable-library-validation` (a real team signs the dylib
+and the appex alike), and .NET's `createdump` helper is removed (an unsandboxed extra
+executable fails App Store validation).
+
+The workflow's `appstore` environment must provide the distribution-certificate,
+provisioning-profile, and App Store Connect API key secrets referenced in
+`.github/workflows/macos.yml`, and should be configured with required reviewers so each
+run is human-approved before any secret is released. Fork PRs never receive secrets.
+
+### Security posture
+
+Secrets are encrypted at rest, redacted in logs, released only to environment-approved runs,
+and live in an ephemeral keychain on a VM that is destroyed after the job. The workflow uses
+only first-party `actions/*` actions, SHA-pinned. No Apple ID credential is ever in CI - the
+ASC API key is the only account-level material and it is role-scoped and revocable. If
+anything leaks anyway: revoke the certificates and the API key in the portal, rotate the
+secrets; distribution certs cannot ship anything without also passing through the ASC account
+and App Review.
+
+### Versioning
+
+`CFBundleShortVersionString` comes from `NAPLPS/NAPLPS.csproj` as always; `CFBundleVersion`
+is stamped with the workflow run number (`BUILD_NUMBER`) so every upload is unique and
+increasing, on the app and both extensions alike.
