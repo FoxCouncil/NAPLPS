@@ -67,20 +67,10 @@ cp -R "$PUB/." "$APP/Contents/MacOS/"
 cp -R "$HERE/quicklook/build/NAPLPSQuickLook.appex" "$APP/Contents/PlugIns/"
 cp -R "$HERE/quicklook/build/NAPLPSPreview.appex" "$APP/Contents/PlugIns/"
 
-# App icon: generated from the repo asset so the bundle is self-contained on any host.
-ICONTMP="$(mktemp -d)"
-if sips -s format png "$ROOT/NAPLPSApp/Assets/naplps.ico" --out "$ICONTMP/base.png" >/dev/null 2>&1; then
-  ISET="$ICONTMP/naplps.iconset"; mkdir -p "$ISET"
-  for S in 16 32 64 128 256 512; do
-    sips -z "$S" "$S" "$ICONTMP/base.png" --out "$ISET/icon_${S}x${S}.png" >/dev/null
-    D=$((S * 2))
-    sips -z "$D" "$D" "$ICONTMP/base.png" --out "$ISET/icon_${S}x${S}@2x.png" >/dev/null
-  done
-  iconutil -c icns "$ISET" -o "$APP/Contents/Resources/naplps.icns"
-else
-  echo "warning: could not convert NAPLPSApp/Assets/naplps.ico; app will have no icon" >&2
-fi
-rm -rf "$ICONTMP"
+# App icon: pre-built iconset committed at macos/naplps.iconset - the pixel-art source
+# upscaled nearest-neighbor at integer factors (512, 1024 stay pixel-crisp; sips' smooth
+# scaling smears pixel art) with bicubic 16/32 for tiny-size legibility.
+iconutil -c icns "$HERE/naplps.iconset" -o "$APP/Contents/Resources/naplps.icns"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
