@@ -107,15 +107,25 @@ public partial class NaplpsFormat
             return NaplpsSystemType.NAPLPS;
         }
 
-        var secondByte = reader.ReadByte();
-        reader.BaseStream.Position = position; // Reset to start
-
-        // Prodigy-style: starts with A1 C8 (Domain command with specific operand)
-        if (firstByte == 0xA1 && secondByte == 0xC8)
+        // Prodigy-style: starts with A1 C8 (Domain command with specific operand) —
+        // possibly behind the CAN+NSR sentinels that NaplpsFormat.New and the Telidraw
+        // compiler prepend. Without skipping them, a Prodigy file reloaded through .td
+        // loses detection and renders with generic metrics (issue #41).
+        var probe = firstByte;
+        var skipped = 0;
+        while ((probe == 0x18 || probe == 0x1F) && skipped < 8 && reader.BaseStream.Position < reader.BaseStream.Length)
         {
+            probe = reader.ReadByte();
+            skipped++;
+        }
+
+        if (probe == 0xA1 && reader.BaseStream.Position < reader.BaseStream.Length && reader.ReadByte() == 0xC8)
+        {
+            reader.BaseStream.Position = position;
             return NaplpsSystemType.Prodigy;
         }
 
+        reader.BaseStream.Position = position; // Reset to start
         return NaplpsSystemType.NAPLPS;
     }
 

@@ -133,6 +133,19 @@ public sealed class Compiler
             CompileStatement(s);
         }
 
+        // Raw statements compile to bare NaplpsCommand placeholders that keep the bytes
+        // exact but neither apply state nor draw (issue #41: a decompiled LINE-RELATIVE
+        // reloads without its lines). The serialized bytes are the source of truth:
+        // re-parse them so every command comes back typed - rendering and state chaining
+        // match a .nap load - while ToBytes stays byte-identical. Skipped when
+        // InitialState seeds a mid-stream context (the decompiler verifier compiles
+        // single commands in isolation, where a fresh parse would misread operands).
+        if (_emittedRaw && InitialState is null)
+        {
+            return NaplpsFormat.FromBytes(_format.ToBytes(),
+                _systemType == NaplpsSystemType.NAPLPS ? null : _systemType);
+        }
+
         return _format;
     }
 
@@ -926,12 +939,16 @@ public sealed class Compiler
     /// This is the lossless escape hatch: any NAPLPS byte sequence that the decompiler
     /// can't express in higher-level DSL gets round-tripped through raw.
     /// </summary>
+    private bool _emittedRaw;
+
     private void CompileRaw(RawStatementNode raw)
     {
         if (raw.Bytes.Count == 0)
         {
             return;
         }
+
+        _emittedRaw = true;
 
         // Bypass AddCommand entirely — raw statements must NOT be instantiated through
         // InUseTable (which runs constructors that move the pen, change state, etc.).
