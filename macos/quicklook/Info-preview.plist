@@ -5,6 +5,7 @@
   <key>CFBundleExecutable</key><string>NAPLPSPreview</string>
   <key>CFBundleIdentifier</key><string>com.foxcouncil.naplps.preview</string>
   <key>CFBundleName</key><string>NAPLPSPreview</string>
+  <key>CFBundleDisplayName</key><string>NAPLPS Preview</string>
   <key>CFBundlePackageType</key><string>XPC!</string>
   <key>CFBundleShortVersionString</key><string>0.0.0</string>
   <key>CFBundleVersion</key><string>1</string>
