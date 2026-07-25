@@ -44,7 +44,8 @@ public class DrawableLine : Drawable, IDrawable
             if (pelPattern != null)
             {
                 var (ox0, ox1, oy0, oy1, pelMajor) = GetDashPel(size);
-                PlotDashedPolyline(image, points, asSet: false, ox0, ox1, oy0, oy1, pelMajor, pelPattern, isColor);
+                PlotDashedPolyline(image, points, asSet: false, ox0, ox1, oy0, oy1, pelMajor, pelPattern, isColor,
+                    TextureGapColor(state));
                 return;
             }
 
@@ -89,11 +90,16 @@ public class DrawableLine : Drawable, IDrawable
     /// double-counted), and stamps the P x P pel only at pel boundaries (every P major-axis steps)
     /// whose pel index is "on". Because a dot is a single pel stamp, every dot is a clean axis-aligned
     /// block and the Bresenham minor-axis jog always lands in a gap - matching the reference render's dots.
+    ///
+    /// <paramref name="gapColor"/> paints the OFF pels, which is what the device does under color
+    /// mode 2 - the same rule the fill path already applies to texture patterns. Pass null for
+    /// modes 0/1, where the gaps are transparent and show the underlying canvas.
     /// </summary>
     internal static void PlotDashedPolyline(Image<Rgba32> image, IReadOnlyList<PointF> points, bool asSet,
-        int ox0, int ox1, int oy0, int oy1, int pelMajor, int[] pelPattern, ISColor color)
+        int ox0, int ox1, int oy0, int oy1, int pelMajor, int[] pelPattern, ISColor color, ISColor? gapColor = null)
     {
         var rgba = color.ToPixel<Rgba32>();
+        var gapRgba = gapColor?.ToPixel<Rgba32>();
         int w = image.Width, h = image.Height;
         int P = Math.Max(1, pelMajor);
         int patTotal = 0;
@@ -115,7 +121,7 @@ public class DrawableLine : Drawable, IDrawable
             return false;
         }
 
-        void Stamp(int cx, int cy)
+        void Stamp(int cx, int cy, Rgba32 pixel)
         {
             for (int yy = cy + oy0; yy < cy + oy1; yy++)
             {
@@ -123,7 +129,7 @@ public class DrawableLine : Drawable, IDrawable
                 for (int xx = cx + ox0; xx < cx + ox1; xx++)
                 {
                     if ((uint)xx >= (uint)w) continue;
-                    image[xx, yy] = rgba;
+                    image[xx, yy] = pixel;
                 }
             }
         }
@@ -153,11 +159,23 @@ public class DrawableLine : Drawable, IDrawable
             }
         }
 
+        // The device's dots and gaps tile the stroke exactly - on the reference render the two
+        // counts sum to the SOLID stroke's, with no pixel left over. So sweep the whole path in
+        // the gap color first and let the dots overprint it, rather than stamping the gap only at
+        // pel boundaries, which would leave the stride between stamps bare.
+        if (gapRgba.HasValue)
+        {
+            for (int i = 0; i < path.Count; i++)
+            {
+                Stamp(path[i].x, path[i].y, gapRgba.Value);
+            }
+        }
+
         for (int i = 0; i < path.Count; i++)
         {
             if (i % P == 0 && OnPel(i / P))
             {
-                Stamp(path[i].x, path[i].y);
+                Stamp(path[i].x, path[i].y, rgba);
             }
         }
     }

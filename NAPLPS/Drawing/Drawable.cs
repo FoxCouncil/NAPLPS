@@ -405,6 +405,28 @@ public class Drawable
     }
 
     /// <summary>
+    /// The color a dotted or dashed stroke's GAPS are painted with, or null when they are left
+    /// transparent. Under color mode 2 the device paints them with the background color, so the
+    /// stroke covers its whole path; under modes 0/1 the canvas shows through. This is the same
+    /// rule <see cref="GetFillBrush"/> already applies to the texture PATTERNS of a fill.
+    /// </summary>
+    internal static ISColor? TextureGapColor(int colorMode, Color backgroundColor)
+    {
+        return colorMode == 2 ? backgroundColor.ToISColor() : null;
+    }
+
+    /// <summary>
+    /// The gap color for a command that carries no color-mode snapshot of its own and is drawn
+    /// straight from the render state it is handed.
+    /// </summary>
+    internal ISColor? TextureGapColor(NaplpsState state)
+    {
+        var (_, bgColor) = GetColorFromState(state);
+
+        return TextureGapColor(state.ColorMode, bgColor);
+    }
+
+    /// <summary>
     /// Gets the outline color for a fillable command per NAPLPS spec.
     /// Non-filled: foreground color. Filled+highlight: nominal black (modes 0/1) or background (mode 2).
     /// </summary>
