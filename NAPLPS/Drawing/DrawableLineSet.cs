@@ -42,7 +42,8 @@ public class DrawableLineSet : Drawable, IDrawable
             if (pelPattern != null)
             {
                 var (ox0, ox1, oy0, oy1, pelMajor) = GetDashPel(size);
-                DrawableLine.PlotDashedPolyline(image, points, asSet: true, ox0, ox1, oy0, oy1, pelMajor, pelPattern, isColor);
+                DrawableLine.PlotDashedPolyline(image, points, asSet: true, ox0, ox1, oy0, oy1, pelMajor, pelPattern, isColor,
+                    TextureGapColor(state));
                 return;
             }
 

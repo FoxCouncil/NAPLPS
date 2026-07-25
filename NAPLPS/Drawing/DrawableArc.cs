@@ -108,7 +108,8 @@ public class DrawableArc : Drawable, IDrawable
                 if (circlePelPattern != null)
                 {
                     var (ox0, ox1, oy0, oy1, pelMajor) = GetDashPel(size);
-                    DrawableLine.PlotDashedPolyline(image, circlePts, asSet: false, ox0, ox1, oy0, oy1, pelMajor, circlePelPattern, circleColor);
+                    DrawableLine.PlotDashedPolyline(image, circlePts, asSet: false, ox0, ox1, oy0, oy1, pelMajor, circlePelPattern, circleColor,
+                        TextureGapColor(circleCmd.ColorMode, circBg));
                 }
                 else
                 {
@@ -241,6 +242,15 @@ public class DrawableArc : Drawable, IDrawable
                         var outlinePen = highlightOutline
                             ? Pens.Solid(outlineColor, outlineWidth)
                             : GetTexturedPen(outlineColor, outlineWidth);
+                        // Under color mode 2 the gaps of a textured stroke take the background
+                        // color, so lay a solid background stroke down for the dots to sit on.
+                        var gapColor = solidOutline ? null : TextureGapColor(fillableCmd.ColorMode, cmdBg);
+
+                        if (gapColor.HasValue)
+                        {
+                            x.DrawLine(FillOptions(), Pens.Solid(gapColor.Value, outlineWidth), arcPoints);
+                        }
+
                         x.DrawLine(FillOptions(), outlinePen, arcPoints);
                     }
                 });
@@ -251,7 +261,8 @@ public class DrawableArc : Drawable, IDrawable
                     if (pelPattern != null)
                     {
                         var (ox0, ox1, oy0, oy1, pelMajor) = GetDashPel(size);
-                        DrawableLine.PlotDashedPolyline(image, arcPoints, asSet: false, ox0, ox1, oy0, oy1, pelMajor, pelPattern, outlineColor);
+                        DrawableLine.PlotDashedPolyline(image, arcPoints, asSet: false, ox0, ox1, oy0, oy1, pelMajor, pelPattern, outlineColor,
+                            TextureGapColor(fillableCmd.ColorMode, cmdBg));
                     }
                     else
                     {
