@@ -129,9 +129,10 @@ public static unsafe class NativeExportsCtx
     }
 
     /// <summary>
-    /// Append bytes to the command stream; parsing and painting continue from current
-    /// state. Transactional: a negative return leaves the context unchanged. Returns the
-    /// new total parsed command count or a negative error code.
+    /// Append bytes to the command stream; decoding continues from the current state.
+    /// Returns the new total count of COMPLETE commands, or a negative error code. A chunk
+    /// ending mid-command leaves that command uncounted until the byte terminating it
+    /// arrives or <see cref="Flush"/> declares the stream over.
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_append")]
     public static int Append(nint handle, byte* bytes, int len)
@@ -145,6 +146,27 @@ public static unsafe class NativeExportsCtx
             var chunk = new byte[len];
             Marshal.Copy((nint)bytes, chunk, 0, len);
             return ctx.Session.Append(chunk);
+        }
+        catch
+        {
+            return ErrException;
+        }
+    }
+
+    /// <summary>
+    /// Declare the appended stream complete, releasing a trailing command whose operand
+    /// list ran to the last byte. Returns the new total command count or a negative error
+    /// code. Only the caller knows a stream has ended - see NaplpsStreamSession.Flush.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_flush")]
+    public static int Flush(nint handle)
+    {
+        var ctx = Get(handle);
+        if (ctx is null) { return ErrBadHandle; }
+
+        try
+        {
+            return ctx.Session.Flush();
         }
         catch
         {

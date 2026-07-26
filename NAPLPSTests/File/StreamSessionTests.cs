@@ -9,7 +9,8 @@ namespace NAPLPSTests.File;
 /// NaplpsStreamSession (the managed core behind the naplps_ctx_* C ABI): stepped
 /// execution must be pixel-identical to a one-shot render, decoder state (DRCS,
 /// character sets, position) must carry across appends including mid-command chunk
-/// splits, draw_text must emit well-formed commands, and appends must be transactional.
+/// splits, a command split across a chunk boundary must be withheld rather than
+/// half-painted, and draw_text must emit well-formed commands.
 /// </summary>
 [TestClass]
 public class StreamSessionTests
@@ -40,9 +41,33 @@ public class StreamSessionTests
             while (session.ExecNext() is not null) { }
         }
 
+        // End of stream: releases a final command whose operands ran to the last byte.
+        session.Flush();
+        while (session.ExecNext() is not null) { }
+
         var buf = new byte[W * H * 4];
         session.CopyFramebufferTo(buf);
         return buf;
+    }
+
+    /// <summary>The naplps_ctx_flush contract: a command whose operand list runs to the last
+    /// received byte is withheld, because at that point it is byte-identical to a truncated
+    /// one and only the caller knows the stream has ended. Flush is that assertion, and it is
+    /// idempotent.</summary>
+    [TestMethod]
+    public void Flush_ReleasesTheCommandEndingAtTheLastByte()
+    {
+        using var session = new NaplpsStreamSession(W, H, prodigy: false);
+
+        // POINT SET ABSOLUTE (0xA4) followed by operand bytes and nothing to terminate them.
+        Assert.AreEqual(0, session.Append([0xA4, 0xC0, 0xC0, 0xC0]), "operands at the frontier must be withheld");
+        Assert.IsNull(session.ExecNext(), "nothing complete, nothing to paint");
+
+        Assert.AreEqual(1, session.Flush(), "flush must release the trailing command");
+        Assert.AreEqual(0, session.ExecNext(), "the released command must be paintable");
+
+        Assert.AreEqual(1, session.Flush(), "flush must be idempotent");
+        Assert.IsNull(session.ExecNext());
     }
 
     /// <summary>Stepping a complete stream command-by-command must equal Render().</summary>
@@ -58,8 +83,9 @@ public class StreamSessionTests
         }
     }
 
-    /// <summary>Chunked appends that split mid-command must converge to the same pixels
-    /// once the stream is complete (the replay repaints the completed commands).</summary>
+    /// <summary>Chunked appends that split mid-command must land on the same pixels as the
+    /// one-shot render: a command split across a boundary is withheld until its terminating
+    /// byte arrives, so no chunking can paint a partial one.</summary>
     [TestMethod]
     public void SplitAppends_ConvergeToOneShotPixels()
     {
@@ -123,8 +149,10 @@ public class StreamSessionTests
         Assert.AreNotEqual(fontLit, customLit, "DRCS definition from the earlier append had no effect");
     }
 
-    /// <summary>draw_text emits Point Set Absolute + SELECT COLOR + TEXT + chars that
-    /// parse back with the requested attributes.</summary>
+    /// <summary>draw_text emits Point Set Absolute + SELECT COLOR + TEXT + SI + chars that
+    /// parse back with the requested attributes. The SI is what makes the payload draw as
+    /// text rather than execute as PDI commands whatever the prior stream invoked into GL -
+    /// see StreamSessionShiftStateTests.</summary>
     [TestMethod]
     public void DrawText_EmitsWellFormedCommands()
     {
@@ -136,8 +164,9 @@ public class StreamSessionTests
         Assert.IsInstanceOfType<PointSetAbsoluteCommand>(cmds[0].Command);
         Assert.IsInstanceOfType<SelectColorCommand>(cmds[1].Command);
         Assert.IsInstanceOfType<TextCommand>(cmds[2].Command);
-        Assert.IsInstanceOfType<AsciiCharCommand>(cmds[3].Command);
+        Assert.IsInstanceOfType<ControlCommand>(cmds[3].Command);
         Assert.IsInstanceOfType<AsciiCharCommand>(cmds[4].Command);
+        Assert.IsInstanceOfType<AsciiCharCommand>(cmds[5].Command);
 
         var final = session.Format.State;
         Assert.AreEqual(7, final.ColorMapForeground);
@@ -198,8 +227,8 @@ public class StreamSessionTests
     }
 
     /// <summary>Transparent-background sessions are the window-overlay model: unpainted
-    /// pixels stay (0,0,0,0), painted pixels are opaque, and the property survives an
-    /// append-triggered replay (the base is the clear color, not seeded pixels).</summary>
+    /// pixels stay (0,0,0,0), painted pixels are opaque, and the property survives later
+    /// appends onto the same long-lived canvas.</summary>
     [TestMethod]
     public void TransparentBackground_OnlyPaintedPixelsCarryAlpha()
     {
@@ -214,7 +243,7 @@ public class StreamSessionTests
         var n1 = win.FillRect(0.1, 0.1, 0.2, 0.05, color: 4);
         win.ExecTo(n1 - 1);
 
-        // Append MORE content afterward - the replay must keep the transparent base.
+        // Append MORE content afterward - the untouched pixels must stay transparent.
         var n2 = win.DrawText(0.12, 0.115, fg: 0, bg: -1, 0.025, 0.0390625, "OK"u8.ToArray());
         win.ExecTo(n2 - 1);
 

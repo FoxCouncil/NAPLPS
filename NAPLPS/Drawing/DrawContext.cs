@@ -272,6 +272,16 @@ public class DrawContext : IDisposable
     /// apply when stepping: the retroactive CLUT re-render for mid-stream palette
     /// redefinition (Prodigy streams are unaffected - fixed hardware palette), and
     /// <see cref="PaletteAnimationMode"/>.
+    ///
+    /// Palette resolution is pinned to the command's OWN snapshot. Filled geometry otherwise
+    /// takes its palette from NaplpsCommand.State - the single live parse state, which in the
+    /// whole-file model is the final one (see Drawable.GetBrushAndPenFromFillableCommand and
+    /// GeometricDrawingCommandBase.GetColors). A stepping consumer decodes ahead of what it has
+    /// painted, so "live" there means "as far as the last append got", and a stream that
+    /// redefines a palette entry would otherwise paint differently depending on where its chunk
+    /// boundaries fell. Pinning makes stepping chunking-invariant and paints each shape in the
+    /// color that was in force when it was coded; it is also why stepping cannot reproduce the
+    /// retroactive re-render, which is the opposite convention.
     /// </summary>
     public void RenderStep(int commandIndex)
     {
@@ -280,18 +290,20 @@ public class DrawContext : IDisposable
             throw new ArgumentOutOfRangeException(nameof(commandIndex));
         }
 
+        var seq = NAPLPS.Commands[commandIndex];
+
         EstablishRenderOptions();
-        Drawable.LivePalette = NAPLPS.State.ColorMap;
-        Drawable.UseLivePalette = false;
+        Drawable.LivePalette = seq.State.ColorMap;
+        Drawable.UseLivePalette = true;
 
         try
         {
-            var seq = NAPLPS.Commands[commandIndex];
             RenderCommand(seq.Command, seq.State);
         }
         finally
         {
             Drawable.LivePalette = null;
+            Drawable.UseLivePalette = false;
         }
     }
 

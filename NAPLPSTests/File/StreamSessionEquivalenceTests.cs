@@ -30,11 +30,11 @@ namespace NAPLPSTests.File;
 /// machines - a divergence here is always a real behaviour change.
 ///
 /// Two tiers:
-/// - Equivalence (default): the whole corpus, a few coarse chunkings. Affordable against
-///   today's replay-based Append, which is O(session history) per append.
+/// - Equivalence (default): the whole corpus, a few coarse chunkings.
 /// - EquivalenceDeep (opt-in): a representative subset with pathological chunkings
-///   (1 byte at a time, 7, 64) plus seeded random splits. Promote this to the default
-///   tier once Append is forward-only and 1-byte chunking is no longer quadratic.
+///   (1 byte at a time, 7, 64) plus seeded random splits. Cheap now that Append is
+///   forward-only, but kept opt-in so the default run stays quick; widening the subset
+///   toward the whole corpus is the natural next step if a chunking bug ever escapes.
 /// </summary>
 [TestClass]
 public class StreamSessionEquivalenceTests
@@ -116,6 +116,12 @@ public class StreamSessionEquivalenceTests
             session.Append(bytes[off..]);
             while (session.ExecNext() is not null) { }
         }
+
+        // The stream is over, so release any command whose operand list ran to the last byte -
+        // at end of stream that is indistinguishable from a truncated one, and only the caller
+        // knows which it is.
+        session.Flush();
+        while (session.ExecNext() is not null) { }
 
         var buf = new byte[W * H * 4];
         session.CopyFramebufferTo(buf);

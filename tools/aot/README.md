@@ -260,6 +260,7 @@ naplps_ctx_draw_text
 naplps_ctx_exec_next
 naplps_ctx_exec_to
 naplps_ctx_fill_rect
+naplps_ctx_flush
 naplps_ctx_framebuffer
 naplps_ctx_reset
 naplps_error_count
@@ -278,14 +279,15 @@ Stateless functions:
 | `naplps_render_png(bytes, len, w, h, buf, buf_len)` | Render .nap to PNG | PNG bytes written, required size if `buf_len == 0`, or negative error |
 | `naplps_render_png_prodigy(...)` | Same, forcing the Prodigy pipeline | as above |
 
-Stateful decoder contexts (`naplps_ctx_*`): an opaque handle owning a persistent decoder and a raw RGBA8888 framebuffer, for consumers that append bytes over time, paint command-by-command, and blit without PNG round-trips. Full semantics in `include/naplps.h`.
+Stateful decoder contexts (`naplps_ctx_*`): an opaque handle owning a persistent decoder and a raw RGBA8888 framebuffer, for consumers that append bytes over time, paint command-by-command, and blit without PNG round-trips. Decoding is forward-only: an append costs the size of its chunk, nothing is repainted, and a command whose operands run to the last received byte is withheld until it is terminated or `naplps_ctx_flush` declares the stream over. Full semantics in `include/naplps.h`.
 
 | Symbol | Purpose |
 |---|---|
 | `naplps_ctx_create(w, h, flags)` / `naplps_ctx_destroy(ctx)` | Lifecycle; flags: bit 0 = Prodigy pipeline, bit 1 = transparent background (window overlays) |
-| `naplps_ctx_reset(ctx)` | Fresh page: clears bytes, decoder state, framebuffer |
-| `naplps_ctx_append(ctx, bytes, len)` | Append stream bytes (transactional); returns command count |
-| `naplps_ctx_command_count(ctx)` | Parsed command count |
+| `naplps_ctx_reset(ctx)` | Fresh page: clears decoder state and framebuffer |
+| `naplps_ctx_append(ctx, bytes, len)` | Append stream bytes; returns the count of complete commands |
+| `naplps_ctx_flush(ctx)` | Declare the stream complete, releasing a trailing operand-terminated command |
+| `naplps_ctx_command_count(ctx)` | Complete-command count |
 | `naplps_ctx_exec_to(ctx, idx)` / `naplps_ctx_exec_next(ctx, dirty)` | Paint commands; step returns -4 at stream end |
 | `naplps_ctx_draw_text(ctx, x, y, fg, bg, cw, ch, text, len)` | Append a field-text run via the library encoder |
 | `naplps_ctx_fill_rect(ctx, x, y, w, h, color)` | Append a solid grid-quantized filled rectangle (block cursor / cell repaint; see header for cell addressing) |

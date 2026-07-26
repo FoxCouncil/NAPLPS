@@ -14,8 +14,9 @@
  * thread of use, or synchronize externally).
  *
  * Return codes (negative values):
- *   -1  Parse error or exception. Context calls are transactional: the context is
- *       left unchanged.
+ *   -1  Parse error or exception. For the stateless functions below the call has no
+ *       effect; for naplps_ctx_* see the context section's failure model - an append
+ *       is not transactional.
  *   -2  Output buffer too small. Call again with a larger buffer.
  *   -3  Invalid input (null pointer, non-positive length, bad argument or state).
  *   -4  Stream exhausted (naplps_ctx_exec_next only; a status, not an error).
@@ -90,23 +91,38 @@ NAPLPS_IMPORT int32_t naplps_version(uint8_t* out_buf, int32_t out_buf_len);
  * A persistent decoder + framebuffer for consumers that append bytes over time and
  * paint command-by-command (the Prodigy reception-system display device).
  *
- * Model: appended bytes accumulate as the source of truth; decoder state (character
- * sets, DRCS glyph definitions, position, attributes) carries across appends, so
- * "define character sets, then draw field text with them" works across calls.
- * Appends are transactional (failure leaves the context unchanged). Each append
- * re-parses the accumulated stream and re-establishes the painted prefix, so append
- * cost grows with total stream size; batch appends where convenient.
+ * Model: forward-only. The context owns one decoder and one framebuffer for its whole
+ * life. Decoder state (character sets, DRCS glyph definitions, position, attributes)
+ * carries across appends, so "define character sets, then draw field text with them"
+ * works across calls. An append decodes only its own bytes and nothing is ever
+ * repainted, so append cost is proportional to the chunk rather than to the stream so
+ * far; there is no reason to batch appends. The byte history is NOT retained.
  *
- * Chunks may split anywhere, including mid-command. A chunk that ends mid-command
- * paints that command from its truncated operands if executed; the completing append
- * repaints it correctly. In other words: pixels are exact once the appended bytes
- * form a complete stream, but a blit taken between a mid-command append and its
- * completion can show a transient partial stroke. Callers that append complete
- * streams (the recommended model) never observe this.
+ * Chunks may split anywhere, including mid-command. A command whose operand list runs
+ * to the end of the received bytes is WITHHELD rather than half-painted, so a blit
+ * taken at any moment shows only complete commands and pixels never change
+ * retroactively. The cost is that naplps_ctx_command_count does not count a command
+ * that is still waiting on operands.
+ *
+ * That withholding also applies at end of stream: an X3.110 operand list is terminated
+ * by the next non-numeric byte and never by a length, so the last command of a complete
+ * stream is byte-identical to a truncated one and only the caller knows which it is.
+ * Call naplps_ctx_flush once a page is complete, or its final command may stay
+ * unpainted. naplps_ctx_draw_text and naplps_ctx_fill_rect flush themselves.
+ *
+ * Failure model: an append decodes but does not paint, and the parse layer records
+ * stream errors rather than failing the call, so a malformed stream leaves the
+ * framebuffer untouched. An append is NOT transactional - it consumes bytes into live
+ * decoder state as it goes and cannot be rolled back. A render failure (a library bug,
+ * not a stream condition) surfaces from naplps_ctx_exec_to / naplps_ctx_exec_next and
+ * may leave the framebuffer partially painted at the reported index.
  *
  * Caveat: mid-stream palette redefinition (generic NAPLPS CLUT animation) is applied
- * retroactively by the one-shot PNG renders but NOT by stepped execution. Prodigy
- * mode is unaffected (fixed hardware palette).
+ * retroactively by the one-shot PNG renders but NOT by stepped execution, which pins
+ * each command's palette to that command's own snapshot - by design, since a
+ * forward-only painter can never revisit an earlier command. That pinning is what makes
+ * stepped output independent of where chunk boundaries fall. Prodigy mode is unaffected
+ * either way (fixed hardware palette).
  *
  * Thread safety: see the top of this header - one context per thread of use. The
  * framebuffer pointer is only coherent between the caller's own calls.
@@ -121,9 +137,8 @@ typedef intptr_t NaplpsCtx;
                                           * 255 - the window-overlay model: composite the
                                           * context by alpha and the page below shows
                                           * through everything the stream did not paint.
-                                          * Replay-safe (replays repaint over the same
-                                          * transparent base). A window wanting an opaque
-                                          * backdrop draws a filled rectangle. */
+                                          * A window wanting an opaque backdrop draws a
+                                          * filled rectangle. */
 
 /* Sentinel returned by naplps_ctx_exec_next when all commands are painted. */
 #define NAPLPS_CTX_EXHAUSTED (-4)
@@ -141,12 +156,19 @@ NAPLPS_IMPORT void      naplps_ctx_reset(NaplpsCtx ctx);
 
 /* --- Feed --- */
 /* Append bytes to the command stream. Does not reset drawing state or the
- * framebuffer: parsing and painting continue from the current state. Byte chunks
- * may split anywhere, including mid-command (see the section comment for the
- * transient-repaint consequence). Transactional: a negative return leaves the
- * context unchanged. Returns the new total parsed command count, or a negative
- * error code. */
+ * framebuffer: decoding continues from the current state. Byte chunks may split
+ * anywhere, including mid-command. Returns the new total count of COMPLETE commands,
+ * or a negative error code; a chunk ending mid-command leaves that command uncounted
+ * until the byte that terminates it arrives, or until naplps_ctx_flush. */
 NAPLPS_IMPORT int32_t   naplps_ctx_append(NaplpsCtx ctx, const uint8_t* bytes, int32_t len);
+
+/* Declare the appended stream complete, releasing a trailing command whose operand
+ * list ran to the last byte (see the section comment). Returns the new total command
+ * count, or a negative error code. Idempotent, and a no-op on a stream that ends on a
+ * command boundary. Do NOT call it on a stream that is merely paused mid-command: that
+ * would release a truncated command as though it were whole. */
+NAPLPS_IMPORT int32_t   naplps_ctx_flush(NaplpsCtx ctx);
+
 NAPLPS_IMPORT int32_t   naplps_ctx_command_count(NaplpsCtx ctx);
 
 /* --- Execute / step --- */
@@ -176,6 +198,23 @@ NAPLPS_IMPORT int32_t   naplps_ctx_exec_next(NaplpsCtx ctx, NaplpsRect* out_dirt
  *                   TEXT attributes (spacing/path/rotation/interrow) to defaults.
  *   ascii           text bytes appended verbatim (0x20-0x7E; codes with DRCS
  *                   definitions render the custom glyphs)
+ *
+ * Independent of the decoder state it lands in, and neutral with respect to it: call it
+ * over any prior stream that is at a command boundary (see the -3 rule below), with no
+ * prefix bytes of your own. The drawing
+ * commands are coded so they resolve whatever the prior stream shifted into GL, the text
+ * is shifted into a character set so it draws rather than executing as drawing commands,
+ * and the incoming GL invocation is put back afterwards - so a caller that paints a field
+ * between two chunks of one presentation keeps its shift state. Do NOT prepend SO, SI or
+ * NSR; there is nothing to compensate for.
+ *
+ * The one piece of state it does not re-establish is the G0 DESIGNATION: a stream that
+ * pointed G0 at a set other than the primary characters and left it there gets the text
+ * drawn with that set's glyphs.
+ *
+ * Other state footprint: pen, color and (when a size is passed) character size, as the
+ * emitted commands imply.
+ *
  * Returns the new total command count; -3 when the stream currently ends inside an
  * unfinished macro/DRCS/texture definition (the bytes would be swallowed into the
  * definition); or a negative error code. */
@@ -201,7 +240,8 @@ NAPLPS_IMPORT int32_t   naplps_ctx_draw_text(NaplpsCtx ctx,
  * draw_text/fill_rect always re-establish what they need): texture state becomes
  * solid fill, solid line, highlight off, zero mask size; color mode becomes 1
  * (foreground) with the given color; the pen ends at (x + w, y) per the X3.110
- * rectangle pen advance.
+ * rectangle pen advance. Shift state is not in that footprint, and is not depended on
+ * either - like draw_text, call it over any prior stream at a command boundary.
  *
  * Returns the new total command count; -3 for a non-positive or non-finite argument
  * or when the stream ends inside an unfinished definition; or a negative error code. */

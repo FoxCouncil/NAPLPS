@@ -9,16 +9,24 @@ namespace NAPLPS;
 /// core behind the C ABI's naplps_ctx_* entry points (see NativeExportsCtx), and equally
 /// usable from managed code and tests.
 ///
-/// Model: the accumulated BYTES are the source of truth. Each append re-parses the whole
-/// buffer (parsing is deterministic, so decoder state - character sets, DRCS, position,
-/// attributes - matches an incremental decode) and replays the already-executed command
-/// prefix onto a fresh canvas, then execution continues from the cursor. Appends are
-/// transactional: on any parse or replay failure the session is left exactly as it was.
+/// Model: forward-only. The session owns one <see cref="NaplpsDecoder"/> and one canvas for
+/// its whole life. An append hands the chunk to the decoder, which returns the commands that
+/// chunk COMPLETED; those are added to the command list and painted, once, by exec_to /
+/// exec_next. Nothing is re-parsed and nothing is repainted, so an append costs the size of
+/// the chunk rather than the size of the session. The byte history is not retained - the
+/// decoder's live state is the whole of the memory.
 ///
-/// Chunks may split anywhere, including mid-command. A trailing partial command parses
-/// from its truncated operands and, once completed by a later append, is repainted
-/// correctly by the replay - so already-blitted pixels can change across an append.
-/// Callers that append complete streams never observe this.
+/// Chunks may split anywhere, including mid-command. A command whose operand list reaches the
+/// end of the received bytes is WITHHELD, not half-emitted: an X3.110 operand list is
+/// terminated by the next non-numeric byte, never by a length, so a complete command ending at
+/// the frontier is byte-identical to a truncated one. It is released as soon as the byte that
+/// terminates it arrives, or by <see cref="Flush"/> for a stream that really has ended.
+/// Pixels therefore never change retroactively.
+///
+/// Failure model: an append parses but does not paint, and the parse layer records stream
+/// errors rather than throwing, so a bad stream leaves the canvas untouched. A render failure
+/// (a library bug, not a stream condition) surfaces from exec_to / exec_next and may leave the
+/// surface partially painted at the reported command index.
 ///
 /// Thread model: instances are not internally synchronized; use one session per thread
 /// or synchronize externally. A disposed session throws ObjectDisposedException from
@@ -26,8 +34,13 @@ namespace NAPLPS;
 /// </summary>
 public sealed class NaplpsStreamSession : IDisposable
 {
-    private readonly List<byte> _bytes = [];
+    /// <summary>Bytes held back until the system type is decidable; see
+    /// <see cref="TryEstablish"/>. Empty once the decoder exists.</summary>
+    private readonly List<byte> _header = [];
+
+    private NaplpsDecoder? _decoder;
     private DrawContext? _draw;
+    private bool _appended;
 
     public NaplpsStreamSession(int width, int height, bool prodigy, bool transparentBackground = false)
     {
@@ -37,6 +50,10 @@ public sealed class NaplpsStreamSession : IDisposable
         Height = height;
         Prodigy = prodigy;
         TransparentBackground = transparentBackground;
+
+        // Forcing Prodigy decides the system type with no bytes at all, so the client path
+        // has its decoder and canvas from the outset.
+        TryEstablish(atStreamEnd: false);
     }
 
     public int Width { get; }
@@ -62,9 +79,11 @@ public sealed class NaplpsStreamSession : IDisposable
     public int CommandCount => Format?.Commands.Count ?? 0;
 
     /// <summary>
-    /// Append bytes to the stream and re-establish the canvas. Transactional: on failure
-    /// the session state (bytes, parse, canvas, cursor) is unchanged and the exception
-    /// propagates. Returns the new total command count.
+    /// Append bytes to the stream. Returns the total count of COMPLETE commands decoded so
+    /// far: a chunk ending mid-command leaves that command out until the byte terminating it
+    /// arrives (or <see cref="Flush"/> declares the stream over). Callers appending whole
+    /// streams and flushing never see the difference. Painting is exec_to / exec_next's job;
+    /// this only decodes.
     /// </summary>
     public int Append(byte[] chunk)
     {
@@ -73,45 +92,44 @@ public sealed class NaplpsStreamSession : IDisposable
         ArgumentNullException.ThrowIfNull(chunk);
         if (chunk.Length == 0) { throw new ArgumentException("empty chunk", nameof(chunk)); }
 
-        var combined = new byte[_bytes.Count + chunk.Length];
-        _bytes.CopyTo(combined);
-        chunk.CopyTo(combined, _bytes.Count);
+        _appended = true;
 
-        var format = NaplpsFormat.FromBytes(combined, Prodigy ? NaplpsSystemType.Prodigy : null);
-
-        // Rebuild the canvas up to the cursor on a fresh context; only after the replay
-        // succeeds does the new state get committed.
-        var draw = new DrawContext(format, new SixLabors.ImageSharp.Size(Width, Height));
-        try
+        if (_decoder is null)
         {
-            if (Prodigy)
-            {
-                // Match naplps_render_png_prodigy: the ctor derives gun width / MVDI font /
-                // display ratio from SystemType; authentic geometry is set explicitly.
-                draw.AuthenticGeometry = true;
-            }
+            _header.AddRange(chunk);
 
-            draw.ClearCanvas(TransparentBackground
-                ? SixLabors.ImageSharp.Color.Transparent
-                : SixLabors.ImageSharp.Color.Black);
-            var replayTo = Math.Min(Cursor, format.Commands.Count);
-            for (var i = 0; i < replayTo; i++)
-            {
-                draw.RenderStep(i);
-            }
+            // Still short of the two bytes DetectSystemType may need; nothing can be decoded
+            // until the answer is known, because it selects the CLUT and the PDI table.
+            if (!TryEstablish(atStreamEnd: false)) { return 0; }
 
-            _bytes.AddRange(chunk);
-            _draw?.Dispose();
-            _draw = draw;
-            Format = format;
-            Cursor = replayTo;
-            return format.Commands.Count;
+            return CommandCount;
         }
-        catch
+
+        return Ingest(_decoder.Feed(chunk));
+    }
+
+    /// <summary>
+    /// Declare the stream complete. At end of stream a command whose operand list runs to the
+    /// last byte is byte-identical to a truncated one, so the decoder holds it; this is the
+    /// caller asserting there is no more data, which releases it. Returns the total command
+    /// count. Calling it on a stream that is merely paused would emit a truncated command as
+    /// though it were whole.
+    /// </summary>
+    public int Flush()
+    {
+        ThrowIfDisposed();
+
+        if (_decoder is null)
         {
-            draw.Dispose();
-            throw;
+            // An intentionally-empty stream is still a stream: flushing it establishes
+            // (generic NAPLPS by the detection rules), so a caller can synthesize runs
+            // on a session that never received wire bytes.
+            _appended = true;
+
+            if (!TryEstablish(atStreamEnd: true)) { return CommandCount; }
         }
+
+        return Ingest(_decoder!.Flush());
     }
 
     /// <summary>Paint up through (and including) command <paramref name="cmdIndex"/>,
@@ -122,7 +140,8 @@ public sealed class NaplpsStreamSession : IDisposable
         ThrowIfDisposed();
 
         ArgumentOutOfRangeException.ThrowIfNegative(cmdIndex);
-        if (_draw is null) { throw new InvalidOperationException("no bytes appended"); }
+        if (!_appended) { throw new InvalidOperationException("no bytes appended"); }
+        if (_draw is null) { return Cursor - 1; }
 
         var target = Math.Min(cmdIndex, CommandCount - 1);
         while (Cursor <= target)
@@ -140,18 +159,141 @@ public sealed class NaplpsStreamSession : IDisposable
     {
         ThrowIfDisposed();
 
-        if (_draw is null) { throw new InvalidOperationException("no bytes appended"); }
-        if (Cursor >= CommandCount) { return null; }
+        if (!_appended) { throw new InvalidOperationException("no bytes appended"); }
+        if (_draw is null || Cursor >= CommandCount) { return null; }
 
         _draw.RenderStep(Cursor);
         return Cursor++;
     }
 
     /// <summary>
+    /// Decide the system type and stand up the decoder, format shell and canvas. Detection
+    /// reads at most the first two bytes and is made ONCE: unlike the old re-parse-everything
+    /// append it cannot be revised later, so a first chunk too short to decide holds its bytes
+    /// rather than locking in the wrong answer. Returns false while still undecidable.
+    /// </summary>
+    private bool TryEstablish(bool atStreamEnd)
+    {
+        NaplpsSystemType systemType;
+
+        if (Prodigy)
+        {
+            systemType = NaplpsSystemType.Prodigy;
+        }
+        else if (_header.Count >= 1 && _header[0] == 0x0E)
+        {
+            // Telidon (version 699) is decided by its single leading Shift-Out.
+            systemType = NaplpsSystemType.Telidon;
+        }
+        else if (_header.Count >= 2)
+        {
+            systemType = _header[0] == 0xA1 && _header[1] == 0xC8
+                ? NaplpsSystemType.Prodigy
+                : NaplpsSystemType.NAPLPS;
+        }
+        else if (atStreamEnd)
+        {
+            // A stream of nought or one byte that is not 0x0E: nothing left to wait for.
+            systemType = NaplpsSystemType.NAPLPS;
+        }
+        else
+        {
+            return false;
+        }
+
+        var state = new NaplpsState();
+        NaplpsDecoder.ApplySystemDefaults(state, systemType);
+
+        _decoder = new NaplpsDecoder(state);
+        Format = new NaplpsFormat(_decoder, systemType);
+
+        _draw = new DrawContext(Format, new SixLabors.ImageSharp.Size(Width, Height))
+        {
+            // Match naplps_render_png_prodigy: the ctor derives gun width / MVDI font /
+            // display ratio from SystemType; authentic geometry is set explicitly.
+            AuthenticGeometry = Prodigy || systemType == NaplpsSystemType.Prodigy,
+        };
+
+        _draw.ClearCanvas(TransparentBackground
+            ? SixLabors.ImageSharp.Color.Transparent
+            : SixLabors.ImageSharp.Color.Black);
+
+        if (_header.Count > 0)
+        {
+            var held = _header.ToArray();
+            _header.Clear();
+            Ingest(_decoder.Feed(held));
+        }
+
+        return true;
+    }
+
+    /// <summary>Take what a feed completed onto the command list.</summary>
+    private int Ingest(List<NaplpsSequence> completed)
+    {
+        var commands = Format!.Commands;
+        commands.AddRange(completed);
+
+        // Keep the animation frame count meaningful even though stepping does not consult it.
+        _draw!.TotalFrames = (uint)Math.Max(0, commands.Count - 1);
+
+        return commands.Count;
+    }
+
+    /// <summary>
+    /// A synthesized run is always coded 8-bit, whatever width the decoded stream is, so that
+    /// its opcodes AND its operands live in GR (0xA0-0xFF) - which is the PDI set, and which
+    /// no shift the caller's stream can perform will take away. The alternative is not
+    /// available: <see cref="NaplpsEncoder.Use7BitMode"/> rebases only the OPERANDS, and
+    /// <see cref="NaplpsCommandBuilder"/> has no 7-bit opcodes, so "7-bit" here could only
+    /// ever mean opcodes in GR with operands in GL - and operands are recognized by a lookup
+    /// in the in-use table, not by a range test, so with GL invoked with a character set every
+    /// one of them decodes as a glyph and its command executes with no operands at all.
+    ///
+    /// Nothing is lost by forcing the width. <see cref="NaplpsFormat.Is7Bit"/> is a reporting
+    /// flag - the Telidraw decompiler's #bits line, the app's properties panel - and is never
+    /// consulted by the decoder; and the session retains no byte history, so these bytes are
+    /// never re-emitted to anyone.
+    /// </summary>
+    private const bool EncodeSynthesized7Bit = false;
+
+    /// <summary>SI: invoke G0 into GL, so bytes in 0x20-0x7F resolve as characters.</summary>
+    private const byte ShiftIn = 0x0F;
+
+    /// <summary>SO: invoke G1 into GL.</summary>
+    private const byte ShiftOut = 0x0E;
+
+    private const byte Escape = 0x1B;
+
+    /// <summary>
+    /// The bytes that re-invoke <paramref name="slot"/> into GL, for putting back the
+    /// invocation a synthesized run had to change. Empty for G0, which the run's own SI
+    /// already left in place.
+    /// </summary>
+    private static byte[] RestoreGraphicLeft(NaplpsState.GsetSlot slot) => slot switch
+    {
+        NaplpsState.GsetSlot.G1 => [ShiftOut],
+        NaplpsState.GsetSlot.G2 => [Escape, 0x6E],  // LS2
+        NaplpsState.GsetSlot.G3 => [Escape, 0x6F],  // LS3
+        _ => [],
+    };
+
+    /// <summary>
     /// Append a field-text run built by the library's own encoder: Point Set Absolute,
     /// SELECT COLOR (mode-shaped), optional TEXT character size, then the text bytes.
-    /// Coordinates and sizes are rounded to the coordinate wire grid. Throws
-    /// <see cref="InvalidOperationException"/> when the stream currently ends inside an
+    /// Coordinates and sizes are rounded to the coordinate wire grid.
+    ///
+    /// Independent of the decoder state it lands in, and neutral with respect to it. The
+    /// drawing commands are coded 8-bit so they resolve through GR whatever the caller's
+    /// stream invoked into GL (see <see cref="EncodeSynthesized7Bit"/>); an SI precedes the
+    /// text so the payload always resolves as characters rather than executing as PDI
+    /// commands; and the incoming GL invocation is restored afterwards, so a caller that
+    /// paints a field between two chunks of one presentation gets its shift state back.
+    /// The one state this does NOT re-establish is the G0 DESIGNATION: a stream that pointed
+    /// G0 at some set other than the primary characters and left it there will have the
+    /// payload drawn with that set's glyphs.
+    ///
+    /// Throws <see cref="InvalidOperationException"/> when the stream currently ends inside an
     /// unfinished macro / DRCS / texture definition (the bytes would be swallowed into
     /// the definition instead of drawing).
     /// </summary>
@@ -173,8 +315,10 @@ public sealed class NaplpsStreamSession : IDisposable
         var grid = 1 << (mbv * 3 - 1);
         double Quant(double v) => Math.Round(v * grid) / grid;
 
+        var incomingGraphicLeft = state?.GraphicLeftInvocation ?? NaplpsState.GsetSlot.G0;
+
         var prior = NaplpsEncoder.Use7BitMode;
-        NaplpsEncoder.Use7BitMode = Format?.Is7Bit ?? false;
+        NaplpsEncoder.Use7BitMode = EncodeSynthesized7Bit;
         var bytes = new List<byte>();
         void Add((byte opcode, NaplpsOperands operands) cmd)
         {
@@ -210,14 +354,19 @@ public sealed class NaplpsStreamSession : IDisposable
                 Add(NaplpsCommandBuilder.BuildText((float)Quant(charW), (float)Quant(charH), multiByteValue: mbv));
             }
 
+            // The payload has to resolve through a character set. It goes here rather than at
+            // the head of the run so the run's FIRST byte stays a PDI opcode - see the note on
+            // AppendComplete about terminating the caller's pending operand list.
+            bytes.Add(ShiftIn);
             bytes.AddRange(ascii);
+            bytes.AddRange(RestoreGraphicLeft(incomingGraphicLeft));
         }
         finally
         {
             NaplpsEncoder.Use7BitMode = prior;
         }
 
-        return Append([.. bytes]);
+        return AppendComplete(bytes);
     }
 
     /// <summary>
@@ -229,11 +378,15 @@ public sealed class NaplpsStreamSession : IDisposable
     /// grid-representable. Decoder-state footprint of the emitted commands: texture
     /// becomes solid fill / solid line / no highlight / zero mask size, color mode
     /// becomes 1 (foreground) with the given color, and the pen ends at (x + w, y) per
-    /// the X3.110 rectangle pen advance. Throws <see cref="InvalidOperationException"/>
+    /// the X3.110 rectangle pen advance. Shift state is not in that footprint and is not
+    /// depended on either: coded 8-bit (see <see cref="EncodeSynthesized7Bit"/>) the run
+    /// neither reads nor writes a byte in GL. Throws <see cref="InvalidOperationException"/>
     /// inside an unfinished definition.
     /// </summary>
     public int FillRect(double x, double y, double w, double h, int color)
     {
+        ThrowIfDisposed();
+
         if (!double.IsFinite(x)) { throw new ArgumentOutOfRangeException(nameof(x), "non-finite position"); }
         if (!double.IsFinite(y)) { throw new ArgumentOutOfRangeException(nameof(y), "non-finite position"); }
         if (!double.IsFinite(w) || w <= 0) { throw new ArgumentOutOfRangeException(nameof(w), "non-positive size"); }
@@ -252,7 +405,7 @@ public sealed class NaplpsStreamSession : IDisposable
         double QuantSize(double v) => Math.Max(1.0 / grid, Quant(v));
 
         var prior = NaplpsEncoder.Use7BitMode;
-        NaplpsEncoder.Use7BitMode = Format?.Is7Bit ?? false;
+        NaplpsEncoder.Use7BitMode = EncodeSynthesized7Bit;
         var bytes = new List<byte>();
         void Add((byte opcode, NaplpsOperands operands) cmd)
         {
@@ -272,7 +425,21 @@ public sealed class NaplpsStreamSession : IDisposable
             NaplpsEncoder.Use7BitMode = prior;
         }
 
-        return Append([.. bytes]);
+        return AppendComplete(bytes);
+    }
+
+    /// <summary>
+    /// Append a run this session built itself. Such a run is complete by construction, so it
+    /// ends with a flush: its last command's operands would otherwise sit at the frontier and
+    /// the drawing would not appear until some later byte terminated it. (Its FIRST byte is
+    /// always a PDI opcode, which terminates any operand list the caller's own stream left
+    /// pending - exactly as the plain append would have.)
+    /// </summary>
+    private int AppendComplete(List<byte> bytes)
+    {
+        Append([.. bytes]);
+
+        return Flush();
     }
 
     /// <summary>Copy the canvas into an RGBA8888 buffer of exactly Width*Height*4 bytes.
@@ -301,16 +468,20 @@ public sealed class NaplpsStreamSession : IDisposable
         _draw.Image.CopyPixelDataTo(destination.AsSpan(0, Width * Height * 4));
     }
 
-    /// <summary>Clear the byte stream, decoder state, and canvas for a fresh page.</summary>
+    /// <summary>Clear the decoder state, command list, and canvas for a fresh page.</summary>
     public void Reset()
     {
         ThrowIfDisposed();
 
-        _bytes.Clear();
+        _header.Clear();
         _draw?.Dispose();
         _draw = null;
+        _decoder = null;
+        _appended = false;
         Format = null;
         Cursor = 0;
+
+        TryEstablish(atStreamEnd: false);
     }
 
     public void Dispose()

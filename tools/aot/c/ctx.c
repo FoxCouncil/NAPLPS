@@ -2,8 +2,8 @@
  *
  * Usage: ctx <file.nap>
  *
- * Appends the file in two chunks split mid-stream, steps every command, verifies the
- * framebuffer lights up, draws a field-text run, and resets. Exit 0 on success.
+ * Appends the file in two chunks split mid-stream, flushes, steps every command, verifies
+ * the framebuffer lights up, draws a field-text run, and resets. Exit 0 on success.
  *
  * Build (macOS):
  *   cc ctx.c -I ../include ../publish/NAPLPS.dylib -Wl,-rpath,$(pwd)/../publish -o ctx
@@ -35,7 +35,9 @@ int main(int argc, char** argv) {
     /* split mid-stream: decoder state must carry across the boundary */
     int32_t half = (int32_t)(n / 2);
     int32_t c1 = naplps_ctx_append(ctx, buf, half);
-    int32_t c2 = naplps_ctx_append(ctx, buf + half, (int32_t)(n - half));
+    naplps_ctx_append(ctx, buf + half, (int32_t)(n - half));
+    /* the file is complete, so release a last command whose operands ran to its final byte */
+    int32_t c2 = naplps_ctx_flush(ctx);
     printf("append: %d then %d commands\n", c1, c2);
     if (c2 <= 0) { return 1; }
 

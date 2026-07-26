@@ -82,6 +82,23 @@ public partial class NaplpsFormat
     }
 
     /// <summary>
+    /// Streaming shell: a format that fronts a LIVE decoder instead of a finished parse.
+    /// <see cref="State"/> is the decoder's own state and <see cref="Commands"/> starts empty,
+    /// growing as the driver appends what each feed completes. Exists so the renderer sees the
+    /// same shape on the wire path as on the file path; the retention and serialization this
+    /// class provides for the editor are the driver's business here.
+    /// See <see cref="NaplpsStreamSession"/>.
+    /// </summary>
+    internal NaplpsFormat(NaplpsDecoder decoder, NaplpsSystemType systemType)
+    {
+        State = decoder.State;
+        _decoder = decoder;
+        SystemType = systemType;
+        IsStreaming = true;
+        IsValid = true;
+    }
+
+    /// <summary>
     /// Detects the NAPLPS system type based on file header patterns.
     /// - Telidon (699): First byte is 0x0E (Shift-Out) - original 1978 hardware format
     /// - Prodigy: First two bytes are A1 C8 (Domain command in 8-bit mode)

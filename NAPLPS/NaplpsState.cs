@@ -186,6 +186,18 @@ public class NaplpsState
         };
     }
 
+    /// <summary>
+    /// Which G-set is currently invoked into GL (0x20-0x7F): G0 after SI, G1 after SO, G2/G3
+    /// after LS2/LS3. Read by a caller synthesizing a byte run that has to force GL - text
+    /// bytes only render as text while GL holds a character set - so it can put back what it
+    /// found. Note that <see cref="Clone"/> does NOT carry this: it is a JSON round trip and
+    /// the invocation is a private field, so only the materialized <see cref="InUseTable"/>
+    /// survives. Read it from the live decoder state, never from a per-command snapshot.
+    /// </summary>
+    [Browsable(false)]
+    [JsonIgnore]
+    public GsetSlot GraphicLeftInvocation => _glInvocation;
+
     /// <summary>SI (0x0F): invoke G0 into GL.</summary>
     public void DoShiftIn()
     {

@@ -14,12 +14,10 @@ namespace NAPLPSTests.File;
 /// for the lifetime of a page, so any dependence on history length is quadratic over the
 /// session.
 ///
-/// EXPECTED RED until the forward-only session lands later in this stack. Today's
-/// Append concatenates onto the full byte history, re-parses it, and replays every
-/// executed command onto a fresh canvas, so a transient paint costs O(page) rather than
-/// O(30 bytes). CI excludes TestCategory=Perf (timing asserts on loaded shared runners
-/// flake; run them isolated), so the default CI run stays green while these are red -
-/// they are the gate the forward-only session must turn green.
+/// These were the gate for the forward-only session rewrite, and were RED before it: the old Append concatenated onto the full byte history,
+/// re-parsed it, and replayed every executed command onto a fresh canvas, so a transient
+/// paint cost O(page) rather than O(30 bytes). The forward-only session turned them
+/// green. They stay out of the default CI run by category (timing-based; run them isolated).
 /// </summary>
 [TestClass]
 public class StreamSessionPerfTests
@@ -68,8 +66,8 @@ public class StreamSessionPerfTests
     }
 
     /// <summary>The discriminating gate: the SAME transient paint, onto an empty session
-    /// and onto one holding a decoded page. Replay-based Append makes the loaded case cost
-    /// a full page re-parse plus re-render; forward-only Append makes the two equal.</summary>
+    /// and onto one holding a decoded page. A replay-based Append would make the loaded case
+    /// cost a full page re-parse plus re-render; forward-only Append makes the two equal.</summary>
     [TestMethod]
     [TestCategory("Perf")]
     public void TransientPaintCost_IsIndependentOfSessionContents()
@@ -95,7 +93,7 @@ public class StreamSessionPerfTests
     }
 
     /// <summary>Cost per tick must not climb as transient paints accumulate. Each tick adds
-    /// bytes and commands that a replay-based Append re-does on every later tick.</summary>
+    /// bytes and commands that a replay-based Append would re-do on every later tick.</summary>
     [TestMethod]
     [TestCategory("Perf")]
     public void RepeatedTransientPaint_CostDoesNotGrowWithTickCount()
