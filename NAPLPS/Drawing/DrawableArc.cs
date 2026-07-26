@@ -188,7 +188,11 @@ public class DrawableArc : Drawable, IDrawable
                 }
 
                 bool wantOutline = !_command.ShouldFill || _command.Texture.ShouldHighlight;
-                bool solidOutline = _command.Texture.ShouldHighlight || _command.Texture.LineTexture == NaplpsTexture.LineTextures.Solid;
+                // Highlight is a FILL attribute: it asks for the filled area to be outlined, and
+                // that outline is solid. An unfilled arc has no area to highlight, so the bit says
+                // nothing about its stroke and the current line texture governs as usual.
+                bool highlightOutline = _command.ShouldFill && _command.Texture.ShouldHighlight;
+                bool solidOutline = highlightOutline || _command.Texture.LineTexture == NaplpsTexture.LineTextures.Solid;
                 // Authentic mode plots the arc with the hard integer pel (like straight lines),
                 // reproducing the device rasterizer's stair-stepped curve instead of an AA pen.
                 bool authenticOutline = !Options.Antialias && wantOutline;
@@ -232,8 +236,9 @@ public class DrawableArc : Drawable, IDrawable
                     if (wantOutline && !authenticOutline)
                     {
                         float outlineWidth = GetPenWidthF(size);
-                        // Highlight uses solid per spec; outlined arcs use current line texture
-                        var outlinePen = _command.Texture.ShouldHighlight
+                        // A filled area's highlight outline is solid; every other stroke, including
+                        // an unfilled arc that merely has the highlight bit set, uses the texture.
+                        var outlinePen = highlightOutline
                             ? Pens.Solid(outlineColor, outlineWidth)
                             : GetTexturedPen(outlineColor, outlineWidth);
                         x.DrawLine(FillOptions(), outlinePen, arcPoints);
