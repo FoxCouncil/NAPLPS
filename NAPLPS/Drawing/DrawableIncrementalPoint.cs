@@ -66,7 +66,7 @@ public class DrawableIncrementalPoint : Drawable, IDrawable
 
                 // Draw the pixel as a filled rectangle of logical pel size
                 var rect = new RectangleF(currentX, currentY, pelWidth, pelHeight);
-                ctx.Fill(color, rect);
+                ctx.Fill(FillOptions(), color, rect);
 
                 // Move to next position
                 currentPelInRow++;

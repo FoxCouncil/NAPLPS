@@ -14,7 +14,6 @@ public class DrawableAsciiChar : Drawable, IDrawable
     private readonly AsciiCharCommand _command;
     private static readonly FontCollection _fontCollection = new();
     private static readonly FontFamily _fontFamily;
-    private static readonly FontFamily? _fallbackFontFamily;
 
     // Pre-computed reference measurements at size 100
     private static readonly float _refLineHeight;
@@ -129,31 +128,6 @@ public class DrawableAsciiChar : Drawable, IDrawable
 
         var refCapBounds = TextMeasurer.MeasureBounds("H", new TextOptions(refFont));
         _refCapHeight = refCapBounds.Height;
-
-        // Load a system fallback font for supplementary characters not in PRM5X10
-        string[] fallbackNames = ["Segoe UI", "Arial", "DejaVu Sans", "Liberation Sans", "Noto Sans"];
-        foreach (var name in fallbackNames)
-        {
-            if (SystemFonts.TryGet(name, out var family))
-            {
-                _fallbackFontFamily = family;
-                break;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Gets the appropriate font family for a character.
-    /// Uses PRM5X10 for ASCII (0x20-0x7E), falls back to system font for supplementary.
-    /// </summary>
-    private static FontFamily GetFontForChar(char c)
-    {
-        if (c >= 0x20 && c <= 0x7E)
-        {
-            return _fontFamily;
-        }
-
-        return _fallbackFontFamily ?? _fontFamily;
     }
 
     /// <summary>
@@ -443,7 +417,7 @@ public class DrawableAsciiChar : Drawable, IDrawable
         if (state.ColorMode == 2)
         {
             var bgRect = new RectangleF(penXdev, penYdev - cellH, cellW + 1, cellH);
-            image.Mutate(ctx => ctx.Fill(new DrawingOptions(), bgColor, bgRect));
+            image.Mutate(ctx => ctx.Fill(FillOptions(), bgColor, bgRect));
         }
 
         // Grid -> device mapping (calibrated pixel-for-pixel on the dominant corpus sizes):
@@ -555,7 +529,7 @@ public class DrawableAsciiChar : Drawable, IDrawable
                 var (_, pelY) = ConvertNormalizedToScreenScale(size, state.LogicalPel.X, state.LogicalPel.Y);
                 float underlineThickness = MathF.Max(1f, MathF.Abs(pelY));
                 var underlinePen = Pens.Solid(fgColor, underlineThickness);
-                ctx.DrawLine(underlinePen, new PointF(penXdev, penYdev), new PointF(penXdev + fullFieldW, penYdev));
+                ctx.DrawLine(FillOptions(), underlinePen, new PointF(penXdev, penYdev), new PointF(penXdev + fullFieldW, penYdev));
             });
         }
     }
@@ -622,7 +596,7 @@ public class DrawableAsciiChar : Drawable, IDrawable
                 float bgX = state.TextSpacing == TextSpacing.Proportional ? penPoint.X : penPoint.X;
                 float bgW = state.TextSpacing == TextSpacing.Proportional ? cellW + 1 : fullCellW + 1;
                 var bgRect = new RectangleF(bgX, cellTopY, bgW, cellH);
-                ctx.Fill(bgColor, bgRect);
+                ctx.Fill(FillOptions(), bgColor, bgRect);
             }
 
             // Nearest-neighbor scale: map each destination pixel to source bitmap
@@ -669,7 +643,7 @@ public class DrawableAsciiChar : Drawable, IDrawable
                 var (pelX, pelY) = ConvertNormalizedToScreenScale(size, state.LogicalPel.X, state.LogicalPel.Y);
                 float underlineThickness = MathF.Max(1f, MathF.Abs(pelY));
                 var underlinePen = Pens.Solid(fgColor, underlineThickness);
-                ctx.DrawLine(underlinePen, new PointF(cellTopX, underlineY), new PointF(cellTopX + cellW, underlineY));
+                ctx.DrawLine(FillOptions(), underlinePen, new PointF(cellTopX, underlineY), new PointF(cellTopX + cellW, underlineY));
             }
         });
     }
@@ -732,8 +706,12 @@ public class DrawableAsciiChar : Drawable, IDrawable
         // This mimics how old NAPLPS renderers worked — they'd blit a bitmap
         // font and stretch it to fit the character field dimensions.
         float fontSize = 100f;
-        var fontFamily = GetFontForChar(glyphChar);
-        var font = fontFamily.CreateFont(fontSize, FontStyle.Regular);
+        // Always the bundled PRM5X10. There used to be a SystemFonts lookup here for characters
+        // outside 0x20-0x7E, which made output depend on which typefaces the host machine happened
+        // to have installed - Segoe UI on Windows, Arial on macOS, DejaVu on Linux. It also never
+        // rendered the supplementary set correctly: this path has no G2 accent composition, so each
+        // non-spacing mark came out as a standalone symbol. See issue #45.
+        var font = _fontFamily.CreateFont(fontSize, FontStyle.Regular);
 
         // Calculate scale factors to stretch the glyph to fit the cell
         // Full horizontal fill, slight vertical margin for authentic spacing
@@ -792,7 +770,7 @@ public class DrawableAsciiChar : Drawable, IDrawable
         var drawingOptions = new DrawingOptions
         {
             Transform = transform,
-            GraphicsOptions = new GraphicsOptions { Antialias = !Options.HardText }
+            GraphicsOptions = new GraphicsOptions { Antialias = Options.Antialias && !Options.HardText }
         };
 
         var charText = glyphChar.ToString();
@@ -806,14 +784,14 @@ public class DrawableAsciiChar : Drawable, IDrawable
                 // Extend width by 1px to avoid gaps between adjacent characters
                 var bgRect = new RectangleF(rect.X, rect.Y, rect.Width + 1, rect.Height);
 
-                ctx.Fill(new DrawingOptions(), bgColor, bgRect);
+                ctx.Fill(FillOptions(), bgColor, bgRect);
             }
 
             if (Options.DebugTextDrawing)
             {
                 if (state.ColorMode != 2)
                 {
-                    ctx.Fill(new DrawingOptions(), bgColor, rect);
+                    ctx.Fill(FillOptions(), bgColor, rect);
                 }
 
                 var debugStrokePen = Pens.Solid(fgColor, 1f);
@@ -847,7 +825,7 @@ public class DrawableAsciiChar : Drawable, IDrawable
                 var (pelX, pelY) = ConvertNormalizedToScreenScale(size, state.LogicalPel.X, state.LogicalPel.Y);
                 float underlineThickness = MathF.Max(1f, MathF.Abs(pelY));
                 var underlinePen = Pens.Solid(fgColor, underlineThickness);
-                ctx.DrawLine(underlinePen, new PointF(cellTopX, underlineY), new PointF(cellTopX + fullFieldW, underlineY));
+                ctx.DrawLine(FillOptions(), underlinePen, new PointF(cellTopX, underlineY), new PointF(cellTopX + fullFieldW, underlineY));
             }
         });
     }

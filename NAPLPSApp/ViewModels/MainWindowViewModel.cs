@@ -48,6 +48,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     private bool isPaletteAnimationMode;
 
+    /// <summary>
+    /// Smooths shape edges in the preview. Off by default to match the device (and the renderer's
+    /// own default): no videotex hardware anti-aliased, and ImageSharp's anti-aliased concave fill
+    /// is not reproducible across CPU architectures, so anything exported or compared should stay
+    /// hard-edged. See issue #45.
+    /// </summary>
+    [ObservableProperty]
+    private bool isAntialiasEnabled;
+
     [ObservableProperty]
     private bool isLooping;
 
@@ -1109,6 +1118,20 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
 
         await UpdateCanvas();
+    }
+
+    /// <summary>
+    /// Driven by the toolbar checkbox's two-way binding rather than a command, so the checkbox
+    /// state and the render option cannot disagree.
+    /// </summary>
+    partial void OnIsAntialiasEnabledChanged(bool value)
+    {
+        if (drawContext != null)
+        {
+            drawContext.Antialias = value;
+        }
+
+        _ = UpdateCanvas();
     }
 
     [RelayCommand]
@@ -2763,6 +2786,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         drawContext = new DrawContext(loadedFile, new SixLabors.ImageSharp.Size(width, height));
         drawContext.PaletteAnimationMode = IsPaletteAnimationMode;
+        drawContext.Antialias = IsAntialiasEnabled;
 
         drawContext.OnImageUpdated += () =>
         {

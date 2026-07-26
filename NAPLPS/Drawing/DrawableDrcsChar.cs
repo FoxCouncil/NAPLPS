@@ -58,7 +58,7 @@ public class DrawableDrcsChar : Drawable, IDrawable
             if (state.ColorMode == 2)
             {
                 var bgRect = new RectangleF(cellTopX, cellTopY, cellW + 1, cellH);
-                ctx.Fill(bgColor, bgRect);
+                ctx.Fill(FillOptions(), bgColor, bgRect);
             }
 
             // Render each set pixel as a filled rectangle
@@ -71,7 +71,7 @@ public class DrawableDrcsChar : Drawable, IDrawable
                         float px = cellTopX + col * pixelW;
                         float py = cellTopY + row * pixelH;
                         var pixelRect = new RectangleF(px, py, pixelW + 0.5f, pixelH + 0.5f);
-                        ctx.Fill(fgColor, pixelRect);
+                        ctx.Fill(FillOptions(), fgColor, pixelRect);
                     }
                 }
             }

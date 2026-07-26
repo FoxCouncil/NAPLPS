@@ -40,6 +40,6 @@ public class DrawableRectangleOutlined : Drawable, IDrawable
 
         var outlinePen = GetTexturedPen(GetOutlineColor(), outlineWidth);
 
-        image.Mutate(x => x.Draw(outlinePen, rect));
+        image.Mutate(x => x.Draw(FillOptions(), outlinePen, rect));
     }
 }

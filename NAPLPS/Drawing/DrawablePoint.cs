@@ -53,7 +53,7 @@ public class DrawablePoint : Drawable, IDrawable
             foreach (var center in points)
             {
                 var rect = new RectangleF(center.X + dxMin, center.Y + dyMin, pelW, pelH);
-                x.Fill(brush, rect);
+                x.Fill(FillOptions(), brush, rect);
             }
         });
     }

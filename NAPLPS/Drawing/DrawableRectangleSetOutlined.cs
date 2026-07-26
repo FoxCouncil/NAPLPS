@@ -67,7 +67,7 @@ public class DrawableRectangleSetOutlined : Drawable, IDrawable
                     new PointF(x1 + inset, y1 + inset),
                     new PointF(x2 - inset, y2 - inset));
 
-                x.Draw(GetTexturedPen(outlineColor, outlineWidth), rect);
+                x.Draw(FillOptions(), GetTexturedPen(outlineColor, outlineWidth), rect);
             }
         });
     }

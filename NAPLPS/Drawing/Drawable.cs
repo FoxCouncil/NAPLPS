@@ -63,6 +63,18 @@ public class Drawable
         /// </summary>
         [ThreadStatic]
         public static bool AuthenticGeometry;
+
+        /// <summary>
+        /// Smooth shape edges instead of the device's hard pixel edges. OFF by default, because
+        /// none of the hardware this renders for anti-aliased anything - and because ImageSharp's
+        /// anti-aliased fill of a CONCAVE polygon is not bit-reproducible across x64 and arm64
+        /// (issue #45), so leaving it on makes rendered output architecture-dependent and the
+        /// visual baselines unshareable. Turn it on for a smoother on-screen preview; leave it off
+        /// for anything whose pixels are compared, exported or archived.
+        /// ThreadStatic and re-established per render (DrawContext.BeginRender).
+        /// </summary>
+        [ThreadStatic]
+        public static bool Antialias;
     }
 
     /// <summary>
@@ -109,21 +121,24 @@ public class Drawable
         return new System.Drawing.Point(Math.Max(1, pelX), Math.Max(1, pelY));
     }
 
-    /// <summary>
-    /// DrawingOptions for authentic (hard-edged) rendering: anti-aliasing off in authentic
-    /// geometry mode so shape fills/outlines get hard pixel edges like the device rasterizer,
-    /// rather than the modern anti-aliased default.
-    /// </summary>
-    internal static DrawingOptions AuthenticDrawingOptions { get; } = new()
+    /// <summary>Hard pixel edges, like the device rasterizer. The default everywhere.</summary>
+    internal static DrawingOptions HardEdgedDrawingOptions { get; } = new()
     {
         GraphicsOptions = new GraphicsOptions { Antialias = false }
     };
 
+    /// <summary>Smoothed edges, for the modern preview. Only used when opted in.</summary>
+    internal static DrawingOptions SmoothDrawingOptions { get; } = new()
+    {
+        GraphicsOptions = new GraphicsOptions { Antialias = true }
+    };
+
     /// <summary>
-    /// Returns hard-edged drawing options when authentic geometry is active, else the default.
+    /// The drawing options every shape fill and outline goes through. Hard-edged unless
+    /// <see cref="Options.Antialias"/> has been turned on.
     /// </summary>
     internal static DrawingOptions FillOptions()
-        => Options.AuthenticGeometry ? AuthenticDrawingOptions : new DrawingOptions();
+        => Options.Antialias ? SmoothDrawingOptions : HardEdgedDrawingOptions;
 
     /// <summary>
     /// Authentic pel for dotted/dashed line texture: a square P x P footprint where
@@ -400,7 +415,7 @@ public class Drawable
             var p1 = points[i];
             var p2 = points[(i + 1) % points.Length];
             var hull = DrawableLine.PerpendicularHullOfSweptPel(p1, p2, dxMin, dxMax, dyMin, dyMax);
-            ctx.FillPolygon(color, hull);
+            ctx.FillPolygon(FillOptions(), color, hull);
         }
     }
 

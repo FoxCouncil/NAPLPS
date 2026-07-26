@@ -276,6 +276,10 @@
 				<CheckBox IsChecked="{Binding GridSettings.IsSnapEnabled}" ToolTip.Tip="Snap to Grid">
 					<i:Icon Value="fa-solid fa-magnet" FontSize="16"/>
 				</CheckBox>
+				<CheckBox IsChecked="{Binding IsAntialiasEnabled}"
+						  ToolTip.Tip="Anti-alias preview — smooths shape edges. Off matches the original hardware, and is what exports and baselines use.">
+					<i:Icon Value="fa-solid fa-wand-magic-sparkles" FontSize="16"/>
+				</CheckBox>
 
 				<!-- Color picker block merged into the same toolbar column. FG/BG swatches open
 				     palette flyouts; the 4x4 mini-palette below is direct-pick (left=FG, right-click

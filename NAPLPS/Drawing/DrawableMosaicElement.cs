@@ -95,7 +95,7 @@ public class DrawableMosaicElement : Drawable, IDrawable
             if (state.ColorMode == 2)
             {
                 var bgRect = new RectangleF(cellTopX, cellTopY, cellW + 1, cellH);
-                ctx.Fill(bgColor, bgRect);
+                ctx.Fill(FillOptions(), bgColor, bgRect);
             }
 
             // Draw each mosaic sub-cell
@@ -108,7 +108,7 @@ public class DrawableMosaicElement : Drawable, IDrawable
 
                     // Add 0.5f overlap to avoid sub-pixel gaps between adjacent cells
                     var cellRect = new RectangleF(rx, ry, subW + 0.5f, subH + 0.5f);
-                    ctx.Fill(fgColor, cellRect);
+                    ctx.Fill(FillOptions(), fgColor, cellRect);
                 }
                 else if (state.ColorMode == 2)
                 {
@@ -121,7 +121,7 @@ public class DrawableMosaicElement : Drawable, IDrawable
                         float ry = mosaicY + rows[i] * subH;
 
                         var cellRect = new RectangleF(rx, ry, subW + 0.5f, subH + 0.5f);
-                        ctx.Fill(bgColor, cellRect);
+                        ctx.Fill(FillOptions(), bgColor, cellRect);
                     }
                 }
             }

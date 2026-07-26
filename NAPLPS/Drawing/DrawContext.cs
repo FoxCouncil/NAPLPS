@@ -24,6 +24,14 @@ public class DrawContext : IDisposable
 
     public Image<Rgba32> Image { get; }
 
+    /// <summary>
+    /// Invoked after every command is rendered, with that command's index, the command itself, and
+    /// the live canvas. Null during normal rendering. Exists so the canvas can be hashed
+    /// command-by-command on two machines and the FIRST diverging command identified, rather than
+    /// only learning that a finished frame differs somewhere. See issue #45.
+    /// </summary>
+    public Action<int, NaplpsCommand, Image<Rgba32>>? CommandRendered { get; set; }
+
     public event Action? OnImageUpdated;
 
     public uint CurrentIndex { get; set; }
@@ -70,6 +78,15 @@ public class DrawContext : IDisposable
     /// (see <see cref="Drawable.Options.AuthenticGeometry"/>).
     /// </summary>
     public bool AuthenticGeometry { get; set; }
+
+    /// <summary>
+    /// Smooth shape edges instead of the device's hard pixel edges. Defaults to FALSE: no hardware
+    /// this renders for anti-aliased anything, and ImageSharp's anti-aliased concave-polygon fill
+    /// is not reproducible across CPU architectures (issue #45), so enabling it makes output
+    /// machine-dependent. Opt in for an on-screen preview; leave off for anything compared or
+    /// archived - the visual baseline suite deliberately runs with it off.
+    /// </summary>
+    public bool Antialias { get; set; }
 
     public DrawContext() { }
 
@@ -184,6 +201,7 @@ public class DrawContext : IDisposable
         Drawable.Options.HardText = HardText;
         Drawable.Options.UseMvdiFont = UseMvdiFont;
         Drawable.Options.AuthenticGeometry = AuthenticGeometry;
+        Drawable.Options.Antialias = Antialias;
         NaplpsUtils.DisplayRatio = DisplayRatio;
 
         // Clear canvas (important for loop restarts and re-renders)
@@ -669,6 +687,8 @@ public class DrawContext : IDisposable
             }
 
             var drawable = RenderCommand(cmd, cmdState);
+
+            CommandRendered?.Invoke(commandIndex, cmd, Image);
 
             // WaitCommand: capture current frame with the wait duration as delay.
             // CLUT animation: if palette changed before this wait, re-render first.

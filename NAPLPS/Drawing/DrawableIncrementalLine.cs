@@ -58,7 +58,7 @@ public class DrawableIncrementalLine : Drawable, IDrawable
                     var p1 = new PointF(currentX, currentY);
                     var p2 = new PointF(nextX, nextY);
                     var hull = DrawableLine.ConvexHullOfSweptPel(p1, p2, dxMin, dxMax, dyMin, dyMax);
-                    ctx.FillPolygon(fgColor, hull);
+                    ctx.FillPolygon(FillOptions(), fgColor, hull);
                 }
 
                 currentX = nextX;

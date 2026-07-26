@@ -64,7 +64,7 @@ public class DrawableLine : Drawable, IDrawable
                 var p2 = points[i + 1];
 
                 var hull = ConvexHullOfSweptPel(p1, p2, dxMin, dxMax, dyMin, dyMax);
-                ctx.FillPolygon(isColor, hull);
+                ctx.FillPolygon(FillOptions(), isColor, hull);
             }
         });
     }

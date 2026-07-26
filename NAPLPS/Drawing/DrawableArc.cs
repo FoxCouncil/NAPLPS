@@ -69,14 +69,14 @@ public class DrawableArc : Drawable, IDrawable
             {
                 if (_command.ShouldFill)
                 {
-                    x.Fill(brush, circle);
+                    x.Fill(FillOptions(), brush, circle);
                 }
 
                 if (wantCircleOutline && !authenticCircle)
                 {
                     // Use centered round pen for circle outlines (symmetric)
                     float outlineWidth = GetPenWidth(size);
-                    x.Draw(Pens.Solid(circleColor, outlineWidth), circle);
+                    x.Draw(FillOptions(), Pens.Solid(circleColor, outlineWidth), circle);
                 }
             });
 
@@ -89,7 +89,7 @@ public class DrawableArc : Drawable, IDrawable
                 for (int i = 0; i <= csteps; i++)
                 {
                     float a = 2f * MathF.PI * i / csteps;
-                    circlePts[i] = new PointF(centerX + circleRadius * MathF.Cos(a), centerY + circleRadius * MathF.Sin(a));
+                    circlePts[i] = new PointF(centerX + circleRadius * DetMath.Cos(a), centerY + circleRadius * DetMath.Sin(a));
                 }
 
                 // Highlight outlines are solid per spec; otherwise honor the current line texture
@@ -121,7 +121,7 @@ public class DrawableArc : Drawable, IDrawable
             if (center == PointF.Empty)
             {
                 // Collinear points - draw a line instead
-                image.Mutate(x => x.DrawLine(pen, new PointF(startX, startY), new PointF(endX, endY)));
+                image.Mutate(x => x.DrawLine(FillOptions(), pen, new PointF(startX, startY), new PointF(endX, endY)));
                 return;
             }
 
@@ -133,10 +133,13 @@ public class DrawableArc : Drawable, IDrawable
                 radius = 1;
             }
 
-            // Direct arc point generation using Atan2 — avoids fragile ArcLineSegment flags
-            float startAngle = MathF.Atan2(startY - center.Y, startX - center.X);
-            float midAngle = MathF.Atan2(midY - center.Y, midX - center.X);
-            float endAngle = MathF.Atan2(endY - center.Y, endX - center.X);
+            // Direct arc point generation using Atan2 — avoids fragile ArcLineSegment flags.
+            // DetMath rather than MathF: `steps` below is an INTEGER derived from these angles, so a
+            // last-ULP disagreement between two platforms' libm retessellates the whole curve rather
+            // than nudging one pixel. See issue #45.
+            float startAngle = DetMath.Atan2(startY - center.Y, startX - center.X);
+            float midAngle = DetMath.Atan2(midY - center.Y, midX - center.X);
+            float endAngle = DetMath.Atan2(endY - center.Y, endX - center.X);
 
             // Determine sweep direction: normalize angle diffs to [0, 2π)
             float startToMid = NormRadians(midAngle - startAngle);
@@ -153,7 +156,7 @@ public class DrawableArc : Drawable, IDrawable
             {
                 float t = (float)i / steps;
                 float a = startAngle + sweepAngle * t;
-                arcPoints[i] = new PointF(center.X + radius * MathF.Cos(a), center.Y + radius * MathF.Sin(a));
+                arcPoints[i] = new PointF(center.X + radius * DetMath.Cos(a), center.Y + radius * DetMath.Sin(a));
             }
 
             if (arcPoints.Length >= 2)
@@ -185,24 +188,32 @@ public class DrawableArc : Drawable, IDrawable
                 {
                     if (_command.ShouldFill)
                     {
+                        // Every fill here goes through FillOptions() like the rest of the drawables.
+                        // This path used to take ImageSharp's default options, so it anti-aliased even
+                        // in authentic mode - wrong for a device that never anti-aliased, and the source
+                        // of issue #45's residual platform divergence: ImageSharp's ANTI-ALIASED fill of
+                        // a CONCAVE polygon is not bit-reproducible across x64 and arm64. The interior
+                        // fill below is exactly that shape. With anti-aliasing off it is identical on
+                        // both. Convex fills, strokes and pattern brushes were all verified portable.
+                        //
                         // ANSI X3.110: filled arc area includes "the region of the outline
                         // and the chord traced by the logical pel." The fill extends by pel size.
                         // Sweep pel along arc curve first (extends fill outward)
                         for (int j = 0; j < arcPoints.Length - 1; j++)
                         {
                             var hull = DrawableLine.PerpendicularHullOfSweptPel(arcPoints[j], arcPoints[j + 1], dxMin, dxMax, dyMin, dyMax);
-                            x.FillPolygon(brush, hull);
+                            x.FillPolygon(FillOptions(), brush, hull);
                         }
 
                         // Sweep pel along the chord (start to end)
                         var chordHull = DrawableLine.PerpendicularHullOfSweptPel(arcPoints[0], arcPoints[^1], dxMin, dxMax, dyMin, dyMax);
-                        x.FillPolygon(brush, chordHull);
+                        x.FillPolygon(FillOptions(), brush, chordHull);
 
                         // Fill the arc-chord interior LAST to cover any sub-pixel gaps
                         // between adjacent pel sweep hulls
                         var fillPoints = new List<PointF>(arcPoints);
                         fillPoints.Add(new PointF(startX, startY));
-                        x.FillPolygon(brush, fillPoints.ToArray());
+                        x.FillPolygon(FillOptions(), brush, fillPoints.ToArray());
                     }
 
                     // Draw outline for non-filled arcs, or highlight outline for filled arcs.
@@ -216,7 +227,7 @@ public class DrawableArc : Drawable, IDrawable
                         var outlinePen = _command.Texture.ShouldHighlight
                             ? Pens.Solid(outlineColor, outlineWidth)
                             : GetTexturedPen(outlineColor, outlineWidth);
-                        x.DrawLine(outlinePen, arcPoints);
+                        x.DrawLine(FillOptions(), outlinePen, arcPoints);
                     }
                 });
 
@@ -335,12 +346,12 @@ public class DrawableArc : Drawable, IDrawable
                 {
                     var fillPoints = new List<PointF>(splineArray);
                     fillPoints.Add(splineArray[0]);
-                    x.FillPolygon(brush, fillPoints.ToArray());
+                    x.FillPolygon(FillOptions(), brush, fillPoints.ToArray());
                 }
 
                 if (!_command.ShouldFill || _command.Texture.ShouldHighlight)
                 {
-                    x.DrawLine(pen, splineArray);
+                    x.DrawLine(FillOptions(), pen, splineArray);
                 }
             });
         }
