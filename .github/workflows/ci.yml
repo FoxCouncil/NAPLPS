@@ -1,0 +1,99 @@
+# Cross-platform test pipeline.
+#
+# The renderer is required to be bit-identical on every OS and CPU architecture: the visual
+# baselines are committed PNGs compared byte-for-byte, so a platform-dependent rasterizer makes
+# them unshareable (issue #45). Both jobs therefore run the SAME suite on Linux, Windows and macOS
+# arm64 rather than picking one runner and hoping.
+#
+# tests   -> the whole suite except the visual corpus. Fast (well under a minute of test time) and
+#            includes PlatformDeterminismTests / RenderPipelineDeterminismTests / DetMathTests,
+#            which pin golden hashes for each drawing primitive. Those alone catch a portability
+#            regression on every push, without waiting for the corpus.
+# visual  -> the 373-file visual corpus against the committed baselines. Slow, and the definitive
+#            check. Uploads the HTML diff report when it fails so a regression can be eyeballed
+#            without reproducing it locally.
+#
+# All actions are first-party and SHA-pinned, matching macos.yml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-15]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build --configuration Release --nologo
+
+      - name: Test
+        run: dotnet test --configuration Release --no-build --nologo --filter "TestCategory!=VR" --logger "trx;LogFileName=tests-${{ matrix.os }}.trx"
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-${{ matrix.os }}
+          path: "**/TestResults/*.trx"
+          if-no-files-found: ignore
+
+  visual:
+    name: visual baselines (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-15]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build --configuration Release --nologo
+
+      # A single render holds the whole animation in memory; the corpus has multi-hundred-frame
+      # files at ~1.1 GB each. Hosted runners have 16 GB, so 3 at a time leaves real headroom.
+      - name: Visual regression
+        env:
+          NAPLPS_VR_PARALLELISM: 3
+        run: dotnet test --configuration Release --no-build --nologo --filter "TestCategory=VR"
+
+      # Summary report plus the raw renders, so a failure can be diffed locally against the
+      # committed baselines. Deliberately NOT the Diffs folder: those HTML pages inline every
+      # frame as base64, which for the multi-thousand-frame files runs to gigabytes.
+      - name: Upload diff report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: visual-report-${{ matrix.os }}
+          path: |
+            NAPLPSTests/bin/Release/net10.0/VisualRegression/VisualRegressionReport.html
+            NAPLPSTests/bin/Release/net10.0/VisualRegression/Actuals
+          if-no-files-found: ignore
+          retention-days: 14
