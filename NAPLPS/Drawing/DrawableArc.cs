@@ -177,7 +177,10 @@ public class DrawableArc : Drawable, IDrawable
 
                 if (fillableCmd.ShouldFill && fillableCmd.Texture.ShouldHighlight)
                 {
-                    outlineColor = (_command.State?.ColorMode == 2 ? cmdBg : Color.Black).ToISColor();
+                    // The command's OWN color-mode snapshot, taken when it was constructed.
+                    // _command.State is the shared live parse state, so by paint time it holds
+                    // the mode the decoder finished in, not the one this arc was drawn under.
+                    outlineColor = (fillableCmd.ColorMode == 2 ? cmdBg : Color.Black).ToISColor();
                 }
                 else
                 {
