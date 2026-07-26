@@ -25,13 +25,17 @@ public class DrawableArc : Drawable, IDrawable
 
         var (brush, pen) = GetBrushAndPenFromFillableCommand(size, state);
 
+        // Hard-edged fills bypass ImageSharp entirely; see ScanlineFiller for why.
+        var (srcFg, srcBg) = ((FillableGeometricDrawingCommandBase)_command).GetColors(state);
+        var fillSource = GetFillSource(size, srcFg, srcBg);
+
         // Check for spline: more vertices than a standard arc requires
         bool isSet = _command is ArcSetFilledCommand or ArcSetOutlinedCommand;
         int normalArcVertexCount = isSet ? 3 : 2;
 
         if (_command.Vertices.Count > normalArcVertexCount)
         {
-            DrawSpline(image, state, size, brush, pen, isSet);
+            DrawSpline(image, state, size, brush, pen, isSet, fillSource);
             return;
         }
 
@@ -63,15 +67,17 @@ public class DrawableArc : Drawable, IDrawable
             var (circFg, circBg) = circleCmd.GetColors(_command.State ?? new NaplpsState());
             var circleColor = (circleCmd.ShouldFill ? circBg : circFg).ToISColor();
             bool wantCircleOutline = !_command.ShouldFill || _command.Texture.ShouldHighlight;
-            bool authenticCircle = Options.AuthenticGeometry && wantCircleOutline;
+            // Any hard-edged outline uses the integer pel plotter, not only authentic mode's:
+            // ImageSharp's non-antialiased stroke is not portable across architectures (issue #45).
+            bool authenticCircle = !Options.Antialias && wantCircleOutline;
+
+            if (_command.ShouldFill)
+            {
+                FillShape(image, circle.Points.Span, brush, fillSource);
+            }
 
             image.Mutate(x =>
             {
-                if (_command.ShouldFill)
-                {
-                    x.Fill(FillOptions(), brush, circle);
-                }
-
                 if (wantCircleOutline && !authenticCircle)
                 {
                     // Use centered round pen for circle outlines (symmetric)
@@ -182,7 +188,7 @@ public class DrawableArc : Drawable, IDrawable
                 bool solidOutline = _command.Texture.ShouldHighlight || _command.Texture.LineTexture == NaplpsTexture.LineTextures.Solid;
                 // Authentic mode plots the arc with the hard integer pel (like straight lines),
                 // reproducing the device rasterizer's stair-stepped curve instead of an AA pen.
-                bool authenticOutline = Options.AuthenticGeometry && wantOutline;
+                bool authenticOutline = !Options.Antialias && wantOutline;
 
                 image.Mutate(x =>
                 {
@@ -202,18 +208,18 @@ public class DrawableArc : Drawable, IDrawable
                         for (int j = 0; j < arcPoints.Length - 1; j++)
                         {
                             var hull = DrawableLine.PerpendicularHullOfSweptPel(arcPoints[j], arcPoints[j + 1], dxMin, dxMax, dyMin, dyMax);
-                            x.FillPolygon(FillOptions(), brush, hull);
+                            FillShape(image, hull, brush, fillSource);
                         }
 
                         // Sweep pel along the chord (start to end)
                         var chordHull = DrawableLine.PerpendicularHullOfSweptPel(arcPoints[0], arcPoints[^1], dxMin, dxMax, dyMin, dyMax);
-                        x.FillPolygon(FillOptions(), brush, chordHull);
+                        FillShape(image, chordHull, brush, fillSource);
 
                         // Fill the arc-chord interior LAST to cover any sub-pixel gaps
                         // between adjacent pel sweep hulls
                         var fillPoints = new List<PointF>(arcPoints);
                         fillPoints.Add(new PointF(startX, startY));
-                        x.FillPolygon(FillOptions(), brush, fillPoints.ToArray());
+                        FillShape(image, fillPoints.ToArray(), brush, fillSource);
                     }
 
                     // Draw outline for non-filled arcs, or highlight outline for filled arcs.
@@ -274,7 +280,7 @@ public class DrawableArc : Drawable, IDrawable
         return angle;
     }
 
-    private void DrawSpline(Image<Rgba32> image, NaplpsState state, Size size, Brush brush, Pen pen, bool isSet)
+    private void DrawSpline(Image<Rgba32> image, NaplpsState state, Size size, Brush brush, Pen pen, bool isSet, in FillSource fillSource)
     {
         // Build absolute control points from the vertex chain
         var controlPoints = new List<PointF>();
@@ -340,20 +346,17 @@ public class DrawableArc : Drawable, IDrawable
         {
             var splineArray = splinePoints.ToArray();
 
-            image.Mutate(x =>
+            if (_command.ShouldFill)
             {
-                if (_command.ShouldFill)
-                {
-                    var fillPoints = new List<PointF>(splineArray);
-                    fillPoints.Add(splineArray[0]);
-                    x.FillPolygon(FillOptions(), brush, fillPoints.ToArray());
-                }
+                var fillPoints = new List<PointF>(splineArray) { splineArray[0] };
 
-                if (!_command.ShouldFill || _command.Texture.ShouldHighlight)
-                {
-                    x.DrawLine(FillOptions(), pen, splineArray);
-                }
-            });
+                FillShape(image, fillPoints.ToArray(), brush, fillSource);
+            }
+
+            if (!_command.ShouldFill || _command.Texture.ShouldHighlight)
+            {
+                image.Mutate(x => x.DrawLine(FillOptions(), pen, splineArray));
+            }
         }
     }
 

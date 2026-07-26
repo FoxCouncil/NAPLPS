@@ -55,17 +55,10 @@ public class DrawableLineSet : Drawable, IDrawable
             return;
         }
 
-        image.Mutate(ctx =>
+        // SET variants draw discrete line segments in pairs: (start, end), (start, end), ...
+        for (var i = 0; i < points.Count - 1; i += 2)
         {
-            // SET variants draw discrete line segments in pairs: (start, end), (start, end), ...
-            for (var i = 0; i < points.Count - 1; i += 2)
-            {
-                var p1 = points[i];
-                var p2 = points[i + 1];
-
-                var hull = DrawableLine.ConvexHullOfSweptPel(p1, p2, dxMin, dxMax, dyMin, dyMax);
-                ctx.FillPolygon(FillOptions(), isColor, hull);
-            }
-        });
+            FillShape(image, DrawableLine.ConvexHullOfSweptPel(points[i], points[i + 1], dxMin, dxMax, dyMin, dyMax), isColor);
+        }
     }
 }

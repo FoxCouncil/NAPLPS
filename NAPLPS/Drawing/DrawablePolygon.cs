@@ -66,15 +66,20 @@ public class DrawablePolygon : Drawable, IDrawable
         // lines and outlined rects, not an anti-aliased centre-sampled pen. A centred pen sits half
         // its width down-left of the true boundary, shifting outlined glyphs (e.g. the Sheraton
         // wordmark "o", an octagonal outlined polygon) down-left of the reference render.
-        bool authenticOutline = wantOutline && solidOutline && Options.AuthenticGeometry;
+        // Any HARD-EDGED solid outline goes through the integer pel plotter, not just authentic
+        // mode's. ImageSharp's non-antialiased stroke is not reproducible across CPU architectures
+        // (issue #45), and the pel plotter is both deterministic and what the device did.
+        bool authenticOutline = wantOutline && solidOutline && !Options.Antialias;
+
+        if (_command.ShouldFill)
+        {
+            var (pFg, pBg) = ((FillableGeometricDrawingCommandBase)_command).GetColors(state);
+
+            FillShape(image, polygonPoints.ToArray(), brush, GetFillSource(size, pFg, pBg));
+        }
 
         image.Mutate(x =>
         {
-            if (_command.ShouldFill)
-            {
-                x.Fill(fillOptions, brush, polygon);
-            }
-
             if (wantOutline && !authenticOutline)
             {
                 float outlineWidth = GetPenWidth(size);

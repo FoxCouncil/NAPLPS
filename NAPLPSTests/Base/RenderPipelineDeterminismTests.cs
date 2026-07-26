@@ -112,7 +112,7 @@ public class RenderPipelineDeterminismTests
     {
         Check("6625A2422BD43FEF", 200, Arc(NaplpsCommandBuilder.OpArcOutlined, Solid, 0), NaplpsSystemType.Prodigy, "outlined solid arc");
         Check("4DC129C21C93D377", 100, Arc(NaplpsCommandBuilder.OpArcOutlined, Dotted, 0), NaplpsSystemType.Prodigy, "outlined dotted arc");
-        Check("05F8EA791086A7DA", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, 0), NaplpsSystemType.Prodigy, "filled arc");
+        Check("9572951709017F1B", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, 0), NaplpsSystemType.Prodigy, "filled arc");
     }
 
     /// <summary>
@@ -128,8 +128,8 @@ public class RenderPipelineDeterminismTests
     [TestMethod]
     public void ProdigyFilledArcInteriorIsPortable()
     {
-        Check("05F8EA791086A7DA", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch), NaplpsSystemType.Prodigy, "filled arc, texture set");
-        Check("A9ED645F049D5E08", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch, highlight: true), NaplpsSystemType.Prodigy, "highlighted filled arc");
+        Check("9572951709017F1B", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch), NaplpsSystemType.Prodigy, "filled arc, texture set");
+        Check("2771D6584361A4C8", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch, highlight: true), NaplpsSystemType.Prodigy, "highlighted filled arc");
     }
 
     [TestMethod]
@@ -137,7 +137,7 @@ public class RenderPipelineDeterminismTests
     {
         Check("CE297BF60AB258D7", 200, Circle(NaplpsCommandBuilder.OpArcOutlined, Solid, 0), NaplpsSystemType.Prodigy, "outlined circle");
         Check("729827933948C5D5", 100, Circle(NaplpsCommandBuilder.OpArcOutlined, Dotted, 0), NaplpsSystemType.Prodigy, "dotted circle");
-        Check("0B01D70FA22CC969", 200, Circle(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch), NaplpsSystemType.Prodigy, "filled circle, texture set");
+        Check("5AC2751DB77F1B08", 200, Circle(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch), NaplpsSystemType.Prodigy, "filled circle, texture set");
     }
 
     // Deliberately no Telidon cases here: a bare Telidon stream renders nothing without colour
@@ -161,7 +161,7 @@ public class RenderPipelineDeterminismTests
 
         var (hardHash, _) = Render(stream, NaplpsSystemType.Prodigy);
 
-        Assert.AreEqual("05F8EA791086A7DA", hardHash, "the default render is no longer the hard-edged one");
+        Assert.AreEqual("9572951709017F1B", hardHash, "the default render is no longer the hard-edged one");
 
         // Same stream with the option on must actually differ, or the switch is not wired up.
         var smoothFormat = NaplpsFormat.FromBytes(stream, NaplpsSystemType.Prodigy);

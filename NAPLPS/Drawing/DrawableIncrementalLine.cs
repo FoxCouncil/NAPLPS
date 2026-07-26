@@ -41,6 +41,8 @@ public class DrawableIncrementalLine : Drawable, IDrawable
         // Rectangular pel sweep with sign-aware offsets
         var (dxMin, dxMax, dyMin, dyMax) = GetPelOffsets(size);
 
+        var hulls = new List<PointF[]>();
+
         image.Mutate(ctx =>
         {
             foreach (var segment in _command.Segments)
@@ -58,13 +60,18 @@ public class DrawableIncrementalLine : Drawable, IDrawable
                     var p1 = new PointF(currentX, currentY);
                     var p2 = new PointF(nextX, nextY);
                     var hull = DrawableLine.ConvexHullOfSweptPel(p1, p2, dxMin, dxMax, dyMin, dyMax);
-                    ctx.FillPolygon(FillOptions(), fgColor, hull);
+                    hulls.Add(hull);
                 }
 
                 currentX = nextX;
                 currentY = nextY;
             }
         });
+
+        foreach (var h in hulls)
+        {
+            FillShape(image, h, fgColor);
+        }
 
         // Update pen position to last point (convert back to normalized)
         var (normX, normY) = ConvertScreenToNormalizedF(size, currentX, currentY);

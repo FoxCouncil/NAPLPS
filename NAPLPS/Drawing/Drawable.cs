@@ -141,6 +141,139 @@ public class Drawable
         => Options.Antialias ? SmoothDrawingOptions : HardEdgedDrawingOptions;
 
     /// <summary>
+    /// Fills a closed shape. Hard-edged fills go through <see cref="ScanlineFiller"/> rather than
+    /// ImageSharp, because ImageSharp's non-antialiased fill is not reproducible across CPU
+    /// architectures (issue #45). Anti-aliased fills are preview-only and stay on ImageSharp.
+    /// </summary>
+    internal static void FillShape(Image<Rgba32> image, ReadOnlySpan<PointF> points, Brush brush, in FillSource source)
+    {
+        if (Options.Antialias)
+        {
+            var array = points.ToArray();
+
+            image.Mutate(x => x.FillPolygon(SmoothDrawingOptions, brush, array));
+
+            return;
+        }
+
+        ScanlineFiller.Fill(image, points, source);
+    }
+
+    /// <summary>Flat-colour variant of <see cref="FillShape"/>.</summary>
+    internal static void FillShape(Image<Rgba32> image, ReadOnlySpan<PointF> points, ISColor color)
+    {
+        if (Options.Antialias)
+        {
+            var array = points.ToArray();
+
+            image.Mutate(x => x.FillPolygon(SmoothDrawingOptions, color, array));
+
+            return;
+        }
+
+        ScanlineFiller.Fill(image, points, new FillSource(color.ToPixel<Rgba32>()));
+    }
+
+    /// <summary>Axis-aligned rectangle as four corners, so it goes through the same filler.</summary>
+    internal static void FillRect(Image<Rgba32> image, RectangleF rect, ISColor color)
+    {
+        Span<PointF> corners =
+        [
+            new(rect.Left, rect.Top),
+            new(rect.Right, rect.Top),
+            new(rect.Right, rect.Bottom),
+            new(rect.Left, rect.Bottom),
+        ];
+
+        FillShape(image, corners, color);
+    }
+
+    /// <summary>
+    /// The hard-edged twin of <see cref="GetFillBrush"/> - same rules, expressed as flat data the
+    /// scanline filler can consume. Kept adjacent to it so the two cannot drift apart.
+    /// </summary>
+    internal FillSource GetFillSource(Size size, Color fgColor, Color bgColor)
+    {
+        var fillableCommand = (GeometricDrawingCommandBase)_baseCommand;
+        var texturePattern = fillableCommand.Texture.TexturePattern;
+        var logicalPel = fillableCommand.LogicalPel;
+
+        var fg = fgColor.ToISColor().ToPixel<Rgba32>();
+
+        if (texturePattern == TexturePatterns.Solid || (logicalPel.X == 0 && logicalPel.Y == 0))
+        {
+            return new FillSource(fg);
+        }
+
+        // Modes 0/1: background is transparent, so the gaps are left untouched.
+        Rgba32? bg = fillableCommand.ColorMode != 2 ? null : bgColor.ToISColor().ToPixel<Rgba32>();
+
+        var scaledLogicalPel = GetScaledLogicalPel(size);
+
+        if (Options.AuthenticGeometry)
+        {
+            int rx = Math.Max(1, (int)Math.Round(Math.Abs(logicalPel.X) * size.Width, MidpointRounding.AwayFromZero));
+            int ry = Math.Max(1, (int)Math.Round(Math.Abs(logicalPel.Y) / NaplpsUtils.DisplayRatio * size.Height, MidpointRounding.AwayFromZero));
+            scaledLogicalPel = new System.Drawing.Point(rx, ry);
+        }
+
+        switch (texturePattern)
+        {
+            case TexturePatterns.MaskA:
+            case TexturePatterns.VerticalHatching:
+            {
+                var pattern = new bool[1, scaledLogicalPel.X * 2];
+
+                for (var i = 0; i < pattern.Length; ++i)
+                {
+                    pattern[0, i] = Options.AuthenticGeometry ? i < pattern.Length / 2 : i >= pattern.Length / 2;
+                }
+
+                return new FillSource(fg, bg, pattern);
+            }
+
+            case TexturePatterns.MaskB:
+            case TexturePatterns.HorizontalHatching:
+            {
+                var pelY = Math.Max(1, scaledLogicalPel.Y);
+                var pattern = new bool[pelY * 2, 1];
+
+                for (var i = 0; i < pattern.Length; ++i)
+                {
+                    pattern[i, 0] = i >= pelY;
+                }
+
+                return new FillSource(fg, bg, pattern);
+            }
+
+            case TexturePatterns.MaskC:
+            case TexturePatterns.CrossHatching:
+            {
+                var pelX = Math.Max(1, scaledLogicalPel.X);
+                var pelY = Math.Max(1, scaledLogicalPel.Y);
+                var width = pelX * 2;
+                var height = pelY * 2;
+                var pattern = new bool[height, width];
+
+                for (var y = 0; y < height; ++y)
+                {
+                    for (var x = 0; x < width; ++x)
+                    {
+                        pattern[y, x] = y >= pelY || x < pelX;
+                    }
+                }
+
+                return new FillSource(fg, bg, pattern);
+            }
+
+            default:
+            {
+                return new FillSource(fg);
+            }
+        }
+    }
+
+    /// <summary>
     /// Authentic pel for dotted/dashed line texture: a square P x P footprint where
     /// P = round-half-up(|logPel.X| * width) (the reference render uses the X-scaled pel for both axes, e.g.
     /// a 1/256 pel -> 3x3), plus the major-axis dash unit P. Offsets follow the sign of the logical
@@ -404,7 +537,7 @@ public class Drawable
     /// Draws a shape outline using rectangular logical pel sweep.
     /// Sweeps the pel along each edge of the given polygon points.
     /// </summary>
-    internal void DrawOutlineWithPelSweep(IImageProcessingContext ctx, PointF[] points, ISColor color, Size size, bool closePath = true)
+    internal void DrawOutlineWithPelSweep(Image<Rgba32> image, PointF[] points, ISColor color, Size size, bool closePath = true)
     {
         var (dxMin, dxMax, dyMin, dyMax) = GetPelOffsets(size);
 
@@ -414,8 +547,8 @@ public class Drawable
         {
             var p1 = points[i];
             var p2 = points[(i + 1) % points.Length];
-            var hull = DrawableLine.PerpendicularHullOfSweptPel(p1, p2, dxMin, dxMax, dyMin, dyMax);
-            ctx.FillPolygon(FillOptions(), color, hull);
+
+            FillShape(image, DrawableLine.PerpendicularHullOfSweptPel(p1, p2, dxMin, dxMax, dyMin, dyMax), color);
         }
     }
 

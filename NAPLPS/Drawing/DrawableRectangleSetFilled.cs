@@ -51,6 +51,8 @@ public class DrawableRectangleSetFilled : Drawable, IDrawable
             ex0 = ox0; ex1 = ox1; ey0 = oy0; ey1 = oy1;
         }
 
+        var fillRects = new List<RectangularPolygon>();
+
         image.Mutate(x =>
         {
             for (int i = 0; i < vertices.Count - 1; i += 2)
@@ -59,7 +61,7 @@ public class DrawableRectangleSetFilled : Drawable, IDrawable
 
                 if (_command.ShouldFill)
                 {
-                    x.Fill(fillOptions, brush, new RectangularPolygon(new PointF(x1 + ex0, y1 + ey0), new PointF(x2 + ex1, y2 + ey1)));
+                    fillRects.Add(new RectangularPolygon(new PointF(x1 + ex0, y1 + ey0), new PointF(x2 + ex1, y2 + ey1)));
                 }
 
                 if (wantOutline && !authenticOutline)
@@ -76,6 +78,17 @@ public class DrawableRectangleSetFilled : Drawable, IDrawable
                 }
             }
         });
+
+        if (fillRects.Count > 0)
+        {
+            var (sFg, sBg) = ((FillableGeometricDrawingCommandBase)_command).GetColors(state);
+            var src = GetFillSource(size, sFg, sBg);
+
+            foreach (var r in fillRects)
+            {
+                FillShape(image, r.Points.Span, brush, src);
+            }
+        }
 
         if (authenticOutline)
         {

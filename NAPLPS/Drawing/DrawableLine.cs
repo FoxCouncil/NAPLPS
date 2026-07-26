@@ -56,17 +56,10 @@ public class DrawableLine : Drawable, IDrawable
             return;
         }
 
-        image.Mutate(ctx =>
+        for (int i = 0; i < points.Count - 1; i++)
         {
-            for (int i = 0; i < points.Count - 1; i++)
-            {
-                var p1 = points[i];
-                var p2 = points[i + 1];
-
-                var hull = ConvexHullOfSweptPel(p1, p2, dxMin, dxMax, dyMin, dyMax);
-                ctx.FillPolygon(FillOptions(), isColor, hull);
-            }
-        });
+            FillShape(image, ConvexHullOfSweptPel(points[i], points[i + 1], dxMin, dxMax, dyMin, dyMax), isColor);
+        }
     }
 
     /// <summary>

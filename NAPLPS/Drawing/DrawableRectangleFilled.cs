@@ -49,13 +49,15 @@ public class DrawableRectangleFilled : Drawable, IDrawable
         }
         var rect = new RectangularPolygon(new PointF(fx1, fy1), new PointF(fx2, fy2));
 
+        if (_command.ShouldFill)
+        {
+            var (rFg, rBg) = ((FillableGeometricDrawingCommandBase)_command).GetColors(state);
+
+            FillShape(image, rect.Points.Span, brush, GetFillSource(size, rFg, rBg));
+        }
+
         image.Mutate(x =>
         {
-            if (_command.ShouldFill)
-            {
-                x.Fill(fillOptions, brush, rect);
-            }
-
             if (!_command.ShouldFill || _command.Texture.ShouldHighlight)
             {
                 float outlineWidth = GetPenWidth(size);
