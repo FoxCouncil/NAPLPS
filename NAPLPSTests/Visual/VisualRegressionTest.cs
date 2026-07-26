@@ -17,7 +17,7 @@ public class VisualRegressionTest
         var files = VisualTestContext.DiscoverExampleFiles().ToList();
         var failures = new System.Collections.Concurrent.ConcurrentBag<string>();
 
-        Parallel.ForEach(files, relativePath =>
+        Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = RenderParallelism() }, relativePath =>
         {
             ProcessFile(relativePath, failures);
         });
@@ -35,6 +35,23 @@ public class VisualRegressionTest
         {
             Assert.Inconclusive($"{newCount} new baseline(s) need to be accepted. See report: {VisualTestContext.ReportPath}");
         }
+    }
+
+    /// <summary>
+    /// How many files to render at once. This cap is about MEMORY, not CPU: a single render holds
+    /// the whole animation in memory as an APNG, and the corpus contains multi-hundred-frame files
+    /// — a 370-frame 1024x768 render is roughly 1.1 GB live. Unbounded, this has exhausted RAM on an
+    /// 8 GB machine and taken the whole box down, so the default stays deliberately conservative.
+    /// Raise it with NAPLPS_VR_PARALLELISM on a machine you know has the headroom.
+    /// </summary>
+    private static int RenderParallelism()
+    {
+        if (int.TryParse(Environment.GetEnvironmentVariable("NAPLPS_VR_PARALLELISM"), out var configured) && configured > 0)
+        {
+            return configured;
+        }
+
+        return Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
     }
 
     private static void ProcessFile(string relativePath, System.Collections.Concurrent.ConcurrentBag<string> failures)
