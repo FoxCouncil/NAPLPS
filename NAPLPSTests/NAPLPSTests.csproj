@@ -26,7 +26,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\examples\**\*" Link="examples\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Include must match the directory's real case: Linux filesystems are case-sensitive, so
+         "..\examples" matched nothing there and the corpus was never copied, failing every test
+         that loads a file. The Link stays lowercase because that is the output path
+         VisualTestContext.ExamplesDir looks in. -->
+    <Content Include="..\Examples\**\*" Link="examples\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
