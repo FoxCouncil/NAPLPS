@@ -110,9 +110,9 @@ public class RenderPipelineDeterminismTests
     [TestMethod]
     public void ProdigyArcsArePortable()
     {
-        Check("6625A2422BD43FEF", 200, Arc(NaplpsCommandBuilder.OpArcOutlined, Solid, 0), NaplpsSystemType.Prodigy, "outlined solid arc");
-        Check("4DC129C21C93D377", 100, Arc(NaplpsCommandBuilder.OpArcOutlined, Dotted, 0), NaplpsSystemType.Prodigy, "outlined dotted arc");
-        Check("9572951709017F1B", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, 0), NaplpsSystemType.Prodigy, "filled arc");
+        Check("C763538EDFF30AE7", 200, Arc(NaplpsCommandBuilder.OpArcOutlined, Solid, 0), NaplpsSystemType.Prodigy, "outlined solid arc");
+        Check("C309643AA0A292B4", 100, Arc(NaplpsCommandBuilder.OpArcOutlined, Dotted, 0), NaplpsSystemType.Prodigy, "outlined dotted arc");
+        Check("879E50F67C84504E", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, 0), NaplpsSystemType.Prodigy, "filled arc");
     }
 
     /// <summary>
@@ -120,24 +120,24 @@ public class RenderPipelineDeterminismTests
     /// ImageSharp cannot fill that reproducibly with anti-aliasing on, so this is the case that
     /// regresses first if the arc path ever stops going through Drawable.FillOptions().
     ///
-    /// Note the first hash equals the plain filled arc's: at a (0,0) logical pel GetFillBrush
-    /// returns a SOLID brush whatever the texture says, so these vary the highlight bit rather
-    /// than the hatch. The concave interior fill - the part that actually broke - is covered either
-    /// way, and PatternBrush portability is pinned in PlatformDeterminismTests.
+    /// The Prodigy ambient state seeds a 1/256 logical pel (see ApplySystemDefaults), so unlike
+    /// the NAPLPS cases GetFillBrush honours the hatch here and the first hash differs from the
+    /// plain filled arc's. The concave interior fill - the part that actually broke - is covered
+    /// either way, and PatternBrush portability is pinned in PlatformDeterminismTests.
     /// </summary>
     [TestMethod]
     public void ProdigyFilledArcInteriorIsPortable()
     {
-        Check("9572951709017F1B", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch), NaplpsSystemType.Prodigy, "filled arc, texture set");
-        Check("2771D6584361A4C8", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch, highlight: true), NaplpsSystemType.Prodigy, "highlighted filled arc");
+        Check("A25B6D201530ADE2", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch), NaplpsSystemType.Prodigy, "filled arc, texture set");
+        Check("14163031327878DB", 200, Arc(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch, highlight: true), NaplpsSystemType.Prodigy, "highlighted filled arc");
     }
 
     [TestMethod]
     public void ProdigyCirclesArePortable()
     {
-        Check("CE297BF60AB258D7", 200, Circle(NaplpsCommandBuilder.OpArcOutlined, Solid, 0), NaplpsSystemType.Prodigy, "outlined circle");
-        Check("729827933948C5D5", 100, Circle(NaplpsCommandBuilder.OpArcOutlined, Dotted, 0), NaplpsSystemType.Prodigy, "dotted circle");
-        Check("5AC2751DB77F1B08", 200, Circle(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch), NaplpsSystemType.Prodigy, "filled circle, texture set");
+        Check("F3E969759110A2E5", 200, Circle(NaplpsCommandBuilder.OpArcOutlined, Solid, 0), NaplpsSystemType.Prodigy, "outlined circle");
+        Check("EC9607C5A2996BB7", 100, Circle(NaplpsCommandBuilder.OpArcOutlined, Dotted, 0), NaplpsSystemType.Prodigy, "dotted circle");
+        Check("B7FF935D052E8CDC", 200, Circle(NaplpsCommandBuilder.OpArcFilled, Solid, VerticalHatch), NaplpsSystemType.Prodigy, "filled circle, texture set");
     }
 
     // Deliberately no Telidon cases here: a bare Telidon stream renders nothing without colour
@@ -161,7 +161,7 @@ public class RenderPipelineDeterminismTests
 
         var (hardHash, _) = Render(stream, NaplpsSystemType.Prodigy);
 
-        Assert.AreEqual("9572951709017F1B", hardHash, "the default render is no longer the hard-edged one");
+        Assert.AreEqual("879E50F67C84504E", hardHash, "the default render is no longer the hard-edged one");
 
         // Same stream with the option on must actually differ, or the switch is not wired up.
         var smoothFormat = NaplpsFormat.FromBytes(stream, NaplpsSystemType.Prodigy);
