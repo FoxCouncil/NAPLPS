@@ -35,19 +35,29 @@ public class IncrementalFieldCommand : GeometricDrawingCommandBase
             Dimensions = vertices[1];
         }
 
-        // Field dimensions are sizes — take absolute value.
-        // In NAPLPS signed-fraction encoding, -1.0 (sign bit set, value bits zero)
-        // represents "full unit screen extent" when used as a dimension.
-        Dimensions = new Vector3(Math.Abs(Dimensions.X), Math.Abs(Dimensions.Y), Math.Abs(Dimensions.Z));
-
+        // Field dimensions keep their SIGN: X3.110 5.3.3.6.2 says they "may be positive or
+        // negative, so that the origin point may be placed in any of the four corners of the
+        // field". Device-verified: MVDI treats a negative dy as a field extending BELOW the
+        // origin, and text at that origin row does not arm the field wrap. Extent math goes
+        // through NaplpsField's edge accessors.
         state.Field = new NaplpsField(Origin, Dimensions);
 
-        // Position pen at the top of the field.
-        // NAPLPS text convention: FIELD followed by CR+LF positions the cursor at the
-        // first text row. The APD (line feed) will move pen down by CharSize.Y into the
-        // field's top row, so we start at Origin.Y + Dimensions.Y (field top edge).
-        var pen = Origin;
-        pen.Y = Origin.Y + Dimensions.Y;
-        state.Pen = pen;
+        // X3.110 5.3.3.6.2: "The drawing point is set to the origin of the field after FIELD
+        // has been executed." Device-verified on MVDI twice: the Eaasy Sabre button labels
+        // (our text was exactly one field height too high when the pen was placed at the top
+        // edge) and the FLDPOS probe (the first text row draws on the origin row of a tall
+        // field). Gated to Prodigy: the historical generic behavior places the pen at the
+        // top edge computed with absolute dimensions, and generic content (icosamp) is
+        // authored against it.
+        if (state.SystemType == NaplpsSystemType.Prodigy)
+        {
+            state.Pen = Origin;
+        }
+        else
+        {
+            var pen = Origin;
+            pen.Y = Origin.Y + Math.Abs(Dimensions.Y);
+            state.Pen = pen;
+        }
     }
 }

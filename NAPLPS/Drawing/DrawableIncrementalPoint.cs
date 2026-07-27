@@ -27,8 +27,8 @@ public class DrawableIncrementalPoint : Drawable, IDrawable
 
         // Get the active field bounds
         var field = state.Field;
-        var fieldOrigin = ConvertNormalizedToPoint(size, field.Origin.X, field.Origin.Y);
-        var (fieldWidth, fieldHeight) = ConvertNormalizedToScreenScale(size, field.Dimensions.X, field.Dimensions.Y);
+        var fieldOrigin = ConvertNormalizedToPoint(size, field.Left, field.Bottom);
+        var (fieldWidth, fieldHeight) = ConvertNormalizedToScreenScale(size, field.Width, field.Height);
 
         // Get logical pel size
         var (pelWidth, pelHeight) = ConvertNormalizedToScreenScale(size, state.LogicalPel.X, state.LogicalPel.Y);

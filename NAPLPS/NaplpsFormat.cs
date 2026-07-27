@@ -693,8 +693,8 @@ public partial class NaplpsFormat
         else if (controlCommand == ActivePositionHome)
         {
             var pen = State.Pen;
-            pen.X = State.Field.Origin.X;
-            pen.Y = State.Field.Origin.Y + State.Field.Dimensions.Y - State.CharSize.Y;
+            pen.X = State.Field.Left;
+            pen.Y = State.Field.Top - State.CharSize.Y;
             State.Pen = pen;
         }
         // Text attributes
@@ -769,12 +769,42 @@ public partial class NaplpsFormat
 
                 // Position pen: column * charWidth from field left, row * charHeight from field top
                 var pen = State.Pen;
-                pen.X = State.Field.Origin.X + col * State.CharSize.X;
-                pen.Y = State.Field.Origin.Y + State.Field.Dimensions.Y - row * State.CharSize.Y;
+                pen.X = State.Field.Left + col * State.CharSize.X;
+                pen.Y = State.Field.Top - row * State.CharSize.Y;
                 State.Pen = pen;
             }
         }
     }
+
+    /// <summary>
+    /// X3.110's format effectors (APR 6.1.2.7, APF 6.1.2.2, APB 6.1.2.1, APD 6.1.2.3) bound
+    /// their movement by the active field only when "the full character field corresponding to
+    /// the cursor lie[s] entirely within the active field before the movement"; otherwise the
+    /// display area (unit screen) bounds apply. COLORBAR's field extends left of the visible
+    /// screen: its cursor is never within it, so carriage returns go to the screen's left
+    /// edge on the device, not the field's.
+    /// </summary>
+    private bool CursorCellInField()
+    {
+        // Membership is the cursor POSITION, half-open at the far edges - not whole-cell
+        // containment. Device-verified: the Prodigy message/logon pages return their lines to
+        // the field's left margin even though the cell pokes past their shallow fields, while
+        // COLORBAR's cursor (right of its off-screen field) returns to the display edge.
+        var f = State.Field;
+        var pen = State.Pen;
+
+        return f.IsSet
+            && pen.X >= f.Left && pen.X < f.Right
+            && pen.Y >= f.Bottom && pen.Y < f.Top;
+    }
+
+    /// <summary>
+    /// Line starts return to the FIELD ORIGIN's X - the authored corner - not the normalized
+    /// left edge. Device-verified: COLORBAR's field extends LEFT from an origin at x=0, and
+    /// its lines return to 0 (the origin), while the message/logon pages' fields have their
+    /// origin at the left margin and return there.
+    /// </summary>
+    private float LineStartX() => State.Field.Origin.X;
 
     private void HandleActivePositionDown()
     {
@@ -792,10 +822,23 @@ public partial class NaplpsFormat
             // PP3 behavior (FUN_2168_02c6): every APD triggers scroll when scroll mode is on.
             // Direction determined by field position in ScrollImage().
             State.ScrollEventOccurred = true;
-            pen.Y = newY < State.Field.Origin.Y ? State.Field.Origin.Y : newY;
+            pen.Y = newY < State.Field.Bottom ? State.Field.Bottom : newY;
         }
         else
         {
+            // X3.110 6.1.2.3 + 6.2.7.14 (scroll off): an APD whose character field was
+            // entirely within the active field and would leave it repositions to the opposite
+            // edge so the cell lies entirely within again - the circular window. The
+            // entirely-within precondition naturally excludes the one-row Prodigy fields
+            // (cell taller than the field), whose APD is a plain newline on the device.
+            // Device-verified on MVDI and gated to Prodigy: generic content (icosamp) is
+            // authored to flow APD-continued rows straight out of the field's bottom, and
+            // the historical renderers let it.
+            if (State.SystemType == NaplpsSystemType.Prodigy && CursorCellInField() && newY < State.Field.Bottom)
+            {
+                newY = State.Field.Top - State.CharSize.Y;
+            }
+
             pen.Y = newY;
             State.ScrollEventOccurred = false;
         }
@@ -806,7 +849,7 @@ public partial class NaplpsFormat
         // the previous line and mid-word field-wrapping).
         if (State.SystemType == NaplpsSystemType.Prodigy)
         {
-            pen.X = State.Field.Origin.X;
+            pen.X = LineStartX();
         }
 
         State.Pen = pen;
@@ -817,7 +860,7 @@ public partial class NaplpsFormat
         if (!State.AutoWrapJustOccurred)
         {
             var pen = State.Pen;
-            pen.X = State.Field.Origin.X;
+            pen.X = LineStartX();
             State.Pen = pen;
         }
     }
@@ -825,8 +868,9 @@ public partial class NaplpsFormat
     private void HandleActivePositionForward()
     {
         var pen = State.Pen;
-        float fieldRight = State.Field.Origin.X + State.Field.Dimensions.X;
-        float fieldLeft = State.Field.Origin.X;
+        bool inField = CursorCellInField();
+        float fieldRight = inField ? State.Field.Right : 1f;
+        float fieldLeft = inField ? State.Field.Left : 0f;
 
         switch (State.TextPath)
         {
@@ -834,7 +878,7 @@ public partial class NaplpsFormat
             {
                 pen.X += State.CharSize.X;
 
-                if (State.Field.Dimensions.X > 0 && pen.X > fieldRight)
+                if (fieldRight > fieldLeft && pen.X > fieldRight)
                 {
                     pen.X = fieldLeft;
                     pen.Y -= State.CharSize.Y;
@@ -846,7 +890,7 @@ public partial class NaplpsFormat
             {
                 pen.X -= State.CharSize.X;
 
-                if (State.Field.Dimensions.X > 0 && pen.X < fieldLeft)
+                if (fieldRight > fieldLeft && pen.X < fieldLeft)
                 {
                     pen.X = fieldRight;
                     pen.Y -= State.CharSize.Y;
@@ -867,8 +911,9 @@ public partial class NaplpsFormat
     private void HandleActivePositionBackward()
     {
         var pen = State.Pen;
-        float fieldRight = State.Field.Origin.X + State.Field.Dimensions.X;
-        float fieldLeft = State.Field.Origin.X;
+        bool inField = CursorCellInField();
+        float fieldRight = inField ? State.Field.Right : 1f;
+        float fieldLeft = inField ? State.Field.Left : 0f;
 
         switch (State.TextPath)
         {
@@ -876,7 +921,7 @@ public partial class NaplpsFormat
             {
                 pen.X -= State.CharSize.X;
 
-                if (State.Field.Dimensions.X > 0 && pen.X < fieldLeft)
+                if (fieldRight > fieldLeft && pen.X < fieldLeft)
                 {
                     pen.X = fieldRight - State.CharSize.X;
                     pen.Y += State.CharSize.Y;
@@ -888,7 +933,7 @@ public partial class NaplpsFormat
             {
                 pen.X += State.CharSize.X;
 
-                if (State.Field.Dimensions.X > 0 && pen.X > fieldRight)
+                if (fieldRight > fieldLeft && pen.X > fieldRight)
                 {
                     pen.X = fieldLeft + State.CharSize.X;
                     pen.Y += State.CharSize.Y;

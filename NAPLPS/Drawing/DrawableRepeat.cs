@@ -32,8 +32,19 @@ public class DrawableRepeat : Drawable, IDrawable
     {
         if (_isRepeatToEOL)
         {
-            // Calculate characters to end of field
-            var fieldEndX = state.Field.Origin.X + state.Field.Dimensions.X;
+            // X3.110 6.2.7.3: the repeat is bounded by the active field only when the cursor's
+            // full character field lies entirely within it; otherwise the line ends at the
+            // unit screen. COLORBAR's field extends left of the visible screen, so its bars
+            // repeat to the screen edge on the device.
+            // Membership is the COLUMN axis only: the repeat runs along the character path, so
+            // the field bounds it iff the cursor sits within the field's columns - the row it
+            // is on does not matter (device-verified: the GO00A000/XEB striping rows repeat to
+            // the field's right edge even though they sit outside its rows, while COLORBAR's
+            // bars, right of its off-screen field's columns, run to the screen edge).
+            var f = state.Field;
+            bool inField = f.IsSet
+                && state.Pen.X >= f.Left && state.Pen.X < f.Right;
+            var fieldEndX = inField ? f.Right : 1.0f;
             return Math.Max(0, (int)((fieldEndX - state.Pen.X) / state.CharSize.X));
         }
 

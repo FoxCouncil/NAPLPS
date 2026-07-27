@@ -14,16 +14,24 @@ public class DrawableDrcsChar : Drawable, IDrawable
 {
     private readonly AsciiCharCommand _command;
     private readonly bool[,] _bitmap;
+    private readonly Vector3? _penOverride;
 
-    public DrawableDrcsChar(AsciiCharCommand command, bool[,] bitmap) : base(command)
+    /// <summary>
+    /// Draws at the command's <see cref="AsciiCharCommand.DrawPen"/> (see
+    /// <see cref="DrawableAsciiChar"/>); REPEAT expansion passes each successive position as
+    /// <paramref name="penOverride"/>.
+    /// </summary>
+    public DrawableDrcsChar(AsciiCharCommand command, bool[,] bitmap, Vector3? penOverride = null) : base(command)
     {
         _command = command;
         _bitmap = bitmap;
+        _penOverride = penOverride;
     }
 
     public void Draw(Image<Rgba32> image, NaplpsState state, Size size)
     {
-        var penPoint = ConvertNormalizedToPoint(size, state.Pen.X, state.Pen.Y);
+        var pen = _penOverride ?? _command.DrawPen;
+        var penPoint = ConvertNormalizedToPoint(size, pen.X, pen.Y);
         var (charSizeX, charSizeY) = ConvertNormalizedToScreenScale(size, state.CharSize.X, state.CharSize.Y);
 
         float cellW = MathF.Max(1f, MathF.Abs(charSizeX));

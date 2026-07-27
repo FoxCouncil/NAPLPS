@@ -358,10 +358,22 @@ public class DrawableAsciiChar : Drawable, IDrawable
         0x00, 0x00, 0x00, 0x00, 0x10, 0x38, 0x6C, 0xC6, 0xC6, 0xC6, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, // 0x7F
     };
 
-    public DrawableAsciiChar(AsciiCharCommand command) : base(command)
+    /// <summary>
+    /// Draws at the command's <see cref="AsciiCharCommand.DrawPen"/> - the sequence's state
+    /// snapshot is cloned before the command executes, so it cannot see the command's own
+    /// automatic wrap, and word retraction rewrites DrawPen on already-placed characters.
+    /// REPEAT expansion re-draws one command at successive positions and passes each as
+    /// <paramref name="penOverride"/>.
+    /// </summary>
+    public DrawableAsciiChar(AsciiCharCommand command, Vector3? penOverride = null) : base(command)
     {
         _command = command;
+        _penOverride = penOverride;
     }
+
+    private readonly Vector3? _penOverride;
+
+    private Vector3 DrawPen => _penOverride ?? _command.DrawPen;
 
     public void Draw(Image<Rgba32> image, NaplpsState state, Size size)
     {
@@ -400,8 +412,9 @@ public class DrawableAsciiChar : Drawable, IDrawable
         // MVDI's device pen: round-half-up (not floor) of the normalized pen. Verified from
         // reference captures — golden stroke offsets are pen-independent only under rounding.
         double dr = NaplpsUtils.DisplayRatio;
-        int penXdev = (int)Math.Round((double)state.Pen.X * size.Width, MidpointRounding.AwayFromZero);
-        int penYdev = size.Height - (int)Math.Round((double)state.Pen.Y / dr * size.Height, MidpointRounding.AwayFromZero);
+        var pen = DrawPen;
+        int penXdev = (int)Math.Round((double)pen.X * size.Width, MidpointRounding.AwayFromZero);
+        int penYdev = size.Height - (int)Math.Round((double)pen.Y / dr * size.Height, MidpointRounding.AwayFromZero);
 
         var (charSizeX, charSizeY) = ConvertNormalizedToScreenScale(size, state.CharSize.X, state.CharSize.Y);
         float cellW = MathF.Max(1f, MathF.Abs(charSizeX));
@@ -454,7 +467,7 @@ public class DrawableAsciiChar : Drawable, IDrawable
         // u(kx) is a nonlinear staircase, NOT a clean em (the old CharSize*W/7.5 was wrong at kx>=6
         // and dropping the fractional pen shifted small glyphs). Under proportional spacing MVDI
         // left-justifies each glyph by its bearing (gx-lb); fixed spacing keeps the bearing.
-        double penXf = (double)state.Pen.X * size.Width;
+        double penXf = (double)pen.X * size.Width;
         double u = MvdiFont.HorizStep(kx) * sx;
 
         bool fixedSpacing = state.TextSpacing != TextSpacing.Proportional;
@@ -540,7 +553,7 @@ public class DrawableAsciiChar : Drawable, IDrawable
     /// </summary>
     private void DrawBitmapFont(Image<Rgba32> image, NaplpsState state, Size size, char glyphChar)
     {
-        var penPoint = ConvertNormalizedToPoint(size, state.Pen.X, state.Pen.Y);
+        var penPoint = ConvertNormalizedToPoint(size, DrawPen.X, DrawPen.Y);
         var (charSizeX, charSizeY) = ConvertNormalizedToScreenScale(size, state.CharSize.X, state.CharSize.Y);
 
         float fullCellW = MathF.Max(1f, MathF.Abs(charSizeX));
@@ -655,7 +668,7 @@ public class DrawableAsciiChar : Drawable, IDrawable
     private void DrawTrueTypeFont(Image<Rgba32> image, NaplpsState state, Size size, char glyphChar)
     {
         // Convert the pen (normalized NAPLPS coords) to screen pixel coordinates.
-        var penPoint = ConvertNormalizedToPoint(size, state.Pen.X, state.Pen.Y);
+        var penPoint = ConvertNormalizedToPoint(size, DrawPen.X, DrawPen.Y);
 
         // Convert character cell size (normalized) to screen pixels
         var (charSizeX, charSizeY) = ConvertNormalizedToScreenScale(size, state.CharSize.X, state.CharSize.Y);

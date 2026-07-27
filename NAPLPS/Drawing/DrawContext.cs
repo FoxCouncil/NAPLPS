@@ -390,11 +390,11 @@ public class DrawContext : IDisposable
             IDrawable charDrawable;
             if (state.DrcsCharacters.TryGetValue(_lastDisplayedChar.OpCode, out var bitmap))
             {
-                charDrawable = new DrawableDrcsChar(_lastDisplayedChar, bitmap);
+                charDrawable = new DrawableDrcsChar(_lastDisplayedChar, bitmap, state.Pen);
             }
             else
             {
-                charDrawable = new DrawableAsciiChar(_lastDisplayedChar);
+                charDrawable = new DrawableAsciiChar(_lastDisplayedChar, state.Pen);
             }
             charDrawable.Draw(Image, state, Size);
 
