@@ -132,8 +132,11 @@ public class CharAlignmentTestGen
             }
 
             // Save
-            // Source examples is at repo root: X:\GitHub\FoxCouncil\NAPLPS\examples
-            var srcExamples = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "examples"));
+            // Source corpus at the repo root. "Examples" must match the directory's real case:
+            // on a case-sensitive filesystem the lowercase spelling resolves to nothing and the
+            // save throws. The bin copy below stays lowercase - that is the Link name the csproj
+            // gives it in the output directory.
+            var srcExamples = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Examples"));
 
             var napPath = Path.Combine(srcExamples, $"{safeName}.nap");
             naplps.Save(napPath);
@@ -316,8 +319,8 @@ public class CharAlignmentTestGen
         var napPath = Path.Combine(outputDir, "chrtest.nap");
         naplps.Save(napPath);
 
-        // Also save to source examples
-        var srcExamples = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(AppContext.BaseDirectory))))!, "examples");
+        // Also save to the source corpus - real directory case, see above.
+        var srcExamples = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(AppContext.BaseDirectory))))!, "Examples");
         if (Directory.Exists(srcExamples))
         {
             IOFile.Copy(napPath, Path.Combine(srcExamples, "chrtest.nap"), true);
