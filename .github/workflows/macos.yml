@@ -40,10 +40,13 @@ jobs:
         run: bash macos/build-app.sh "$RUNNER_TEMP/NAPLPS.app"
       - name: Zip bundle
         run: ditto -c -k --keepParent "$RUNNER_TEMP/NAPLPS.app" "$RUNNER_TEMP/NAPLPS-app-adhoc.zip"
+      # This builds on every push to main and every PR, so without a retention it piles up:
+      # 27 copies of the same 55MB app had accumulated on GitHub's 90-day default.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: NAPLPS-app-adhoc
           path: ${{ runner.temp }}/NAPLPS-app-adhoc.zip
+          retention-days: 14
 
   appstore:
     name: App Store (TestFlight)
@@ -98,10 +101,12 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
         run: bash macos/build-appstore.sh "$RUNNER_TEMP/out"
 
+      # Kept longer than the ad-hoc build: this is the artifact that actually went to TestFlight.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: NAPLPS-appstore-pkg
           path: ${{ runner.temp }}/out/NAPLPS.pkg
+          retention-days: 90
 
       # The App Store Connect API key replaces any Apple ID credential: no account password
       # or 2FA material ever reaches CI, and the key can be role- and app-scoped in ASC.
