@@ -802,18 +802,25 @@ sealed class Program
 
     private static int ExportApng(DrawContext drawContext, string? outputFile, bool useStdout, int delay, bool loop = false, int blinkCycles = 0)
     {
-        using var apng = drawContext.RenderToApng(delay, loop, blinkCycles);
-
-        var visualFrames = apng.Frames.Count;
-
         if (useStdout)
         {
+            // The writer patches the frame count into acTL at the end, so it needs to seek and
+            // stdout cannot. A MemoryStream holds only the compressed file - roughly a megabyte -
+            // rather than every frame at full canvas size.
+            using var buffer = new MemoryStream();
+            drawContext.RenderApngToStream(buffer, delay, loop, blinkCycles);
+
             using var stdout = Console.OpenStandardOutput();
-            apng.SaveAsPng(stdout);
+            buffer.Position = 0;
+            buffer.CopyTo(stdout);
+
+            return 0;
         }
-        else if (outputFile != null)
+
+        if (outputFile != null)
         {
-            apng.SaveAsPng(outputFile);
+            var visualFrames = drawContext.RenderApngToFile(outputFile, delay, loop, blinkCycles);
+
             Console.Error.WriteLine($"Exported APNG with {visualFrames} frames to: {outputFile}");
         }
 

@@ -681,34 +681,78 @@ public class DrawContext : IDisposable
     /// Renders straight to an APNG file, holding only the current and previous canvas rather than
     /// every frame. See <see cref="ApngWriter"/> for why that matters - the in-memory path is
     /// O(frames) and the corpus contains files that need gigabytes on their own.
-    /// Blink frames are not supported here; use <see cref="RenderToApng"/> for those.
     /// </summary>
+    /// <param name="blinkCycles">Number of blink animation cycles to append after drawing (0 = none)</param>
+    /// <param name="startFrame">1-based first frame to keep; 0 = from the beginning.</param>
+    /// <param name="endFrame">1-based last frame to keep, inclusive; 0 = to the end.</param>
+    /// <param name="outputSize">Resize each frame to this before writing; null = native canvas size.</param>
     /// <returns>The number of frames written.</returns>
-    public int RenderApngToFile(string path, int delayHundredths = 5, bool loop = false)
+    public int RenderApngToFile(string path, int delayHundredths = 5, bool loop = false, int blinkCycles = 0, int startFrame = 0, int endFrame = 0, Size? outputSize = null)
     {
         using var file = System.IO.File.Create(path);
-        using var writer = new ApngWriter(file, Size.Width, Size.Height, loop ? 0u : 1u);
 
-        var canvas = new byte[Size.Width * Size.Height * 4];
-        var previous = new byte[Size.Width * Size.Height * 4];
+        return RenderApngToStream(file, delayHundredths, loop, blinkCycles, startFrame, endFrame, outputSize);
+    }
+
+    /// <summary>
+    /// As <see cref="RenderApngToFile"/>, but to any seekable stream - the frame count is patched
+    /// into acTL at the end, so the stream has to support seeking.
+    /// </summary>
+    public int RenderApngToStream(Stream stream, int delayHundredths = 5, bool loop = false, int blinkCycles = 0, int startFrame = 0, int endFrame = 0, Size? outputSize = null)
+    {
+        var size = outputSize ?? Size;
+        bool resizing = size.Width != Size.Width || size.Height != Size.Height;
+
+        using var writer = new ApngWriter(stream, size.Width, size.Height, loop ? 0u : 1u);
+
+        var canvas = new byte[size.Width * size.Height * 4];
+        var previous = new byte[size.Width * size.Height * 4];
         bool first = true;
         int frames = 0;
+        int index = 0;
 
-        RenderFrameSequence(delayHundredths, (frame, multiplier) =>
+        int startIndex = Math.Max(0, startFrame - 1);
+
+        void Emit(Image<Rgba32> frame, ushort delayNumerator)
         {
-            frame.CopyPixelDataTo(canvas);
+            // Frame selection happens here rather than by trimming afterwards, so frames outside
+            // the range are never encoded at all.
+            bool keep = index >= startIndex && (endFrame <= 0 || index < endFrame);
+            index++;
 
-            // The first frame becomes the PNG's own image and must cover the whole canvas.
+            if (!keep)
+            {
+                return;
+            }
+
+            if (resizing)
+            {
+                using var scaled = frame.Clone(c => c.Resize(size.Width, size.Height));
+                scaled.CopyPixelDataTo(canvas);
+            }
+            else
+            {
+                frame.CopyPixelDataTo(canvas);
+            }
+
+            // The first frame written becomes the PNG's own image and must cover the whole canvas.
             var rect = first
-                ? new Rectangle(0, 0, Size.Width, Size.Height)
-                : ApngWriter.DirtyRect(canvas, previous, Size.Width, Size.Height);
+                ? new Rectangle(0, 0, size.Width, size.Height)
+                : ApngWriter.DirtyRect(canvas, previous, size.Width, size.Height);
 
-            writer.WriteFrame(canvas, rect, (ushort)(delayHundredths * multiplier), 1000);
+            writer.WriteFrame(canvas, rect, delayNumerator, 1000);
 
             canvas.CopyTo(previous.AsSpan());
             first = false;
             frames++;
-        });
+        }
+
+        RenderFrameSequence(delayHundredths, (frame, multiplier) => Emit(frame, (ushort)(delayHundredths * multiplier)));
+
+        if (blinkCycles > 0 && NAPLPS.State.BlinkProcesses.Count > 0)
+        {
+            BlinkFrameSequence(blinkCycles, (frame, multiplier) => Emit(frame, (ushort)(BlinkDelayNumerator * (uint)multiplier)));
+        }
 
         Drawable.LivePalette = null;
 
@@ -819,6 +863,21 @@ public class DrawContext : IDisposable
     /// </summary>
     private void AppendBlinkFrames(Image<Rgba32> apng, int cycles)
     {
+        var blinkDelay = new Rational(BlinkDelayNumerator, 1000);
+
+        BlinkFrameSequence(cycles, (frame, multiplier) => AddApngFrame(apng, frame, blinkDelay, multiplier, replaceRoot: false));
+    }
+
+    /// <summary>Base delay for a blink tick, in the same 1/1000s units the drawing frames use.</summary>
+    private const uint BlinkDelayNumerator = 10;
+
+    /// <summary>
+    /// Walks the blink animation and hands each distinct frame to <paramref name="emitFrame"/> with
+    /// the number of 100ms ticks it should be held for. The frame is disposed once emitted, so a
+    /// consumer that needs to keep it must copy. Shared by the in-memory and streaming APNG paths.
+    /// </summary>
+    private void BlinkFrameSequence(int cycles, Action<Image<Rgba32>, int> emitFrame)
+    {
         InitializeBlinkAnimator();
 
         if (BlinkAnimator == null || !BlinkAnimator.HasActiveProcesses)
@@ -838,7 +897,6 @@ public class DrawContext : IDisposable
 
         int totalMs = maxCycleMs * cycles;
         const int tickMs = 100; // 100ms per tick (matches NAPLPS blink time unit)
-        var blinkDelay = new Rational(10, 1000); // 100ms = 10/100s
 
         var oldMode = PaletteAnimationMode;
         PaletteAnimationMode = true;
@@ -863,7 +921,7 @@ public class DrawContext : IDisposable
                 {
                     if (lastBlinkFrame != null)
                     {
-                        AddApngFrame(apng, lastBlinkFrame, blinkDelay, frameAccumulator, replaceRoot: false);
+                        emitFrame(lastBlinkFrame, frameAccumulator);
                         lastBlinkFrame.Dispose();
                     }
 
@@ -879,7 +937,7 @@ public class DrawContext : IDisposable
 
         if (lastBlinkFrame != null)
         {
-            AddApngFrame(apng, lastBlinkFrame, blinkDelay, frameAccumulator, replaceRoot: false);
+            emitFrame(lastBlinkFrame, frameAccumulator);
             lastBlinkFrame.Dispose();
         }
 

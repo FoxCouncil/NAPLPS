@@ -1002,34 +1002,21 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         var path = result.Path.LocalPath;
 
-        // APNG path is fundamentally different: RenderToApng walks the command sequence and
-        // produces a multi-frame Image<Rgba32> with WAIT-driven inter-frame timing baked in.
-        // Single-frame formats just snapshot the live canvas.
+        // APNG path is fundamentally different: it walks the command sequence and emits a frame per
+        // step with WAIT-driven inter-frame timing baked in. Single-frame formats just snapshot the
+        // live canvas.
         if (vm.Format == ExportFormat.Apng)
         {
             int delayHundredths = System.Math.Max(1, vm.ApngFrameDelayMs / 10);
-            using var apngImage = drawContext.RenderToApng(delayHundredths, vm.ApngLoop, vm.ApngBlinkCycles);
 
-            // Clip to the user's frame range if they specified one (1-based inclusive).
-            if (vm.ApngStartFrame > 0 || vm.ApngEndFrame > 0)
-            {
-                int start = System.Math.Max(0, vm.ApngStartFrame - 1);
-                int endExclusive = vm.ApngEndFrame > 0
-                    ? System.Math.Min(apngImage.Frames.Count, vm.ApngEndFrame)
-                    : apngImage.Frames.Count;
+            // Streams straight to the file: frame range and scale are applied as each frame is
+            // produced, so a multi-thousand-frame export no longer has to fit in memory first.
+            var outputSize = System.Math.Abs(vm.Scale - 1.0) > 0.001
+                ? new SixLabors.ImageSharp.Size(vm.OutputWidth, vm.OutputHeight)
+                : (SixLabors.ImageSharp.Size?)null;
 
-                // Drop frames outside [start, endExclusive). Iterate from the end so indices stay stable.
-                for (int i = apngImage.Frames.Count - 1; i >= endExclusive; i--) { apngImage.Frames.RemoveFrame(i); }
-                for (int i = start - 1; i >= 0; i--) { apngImage.Frames.RemoveFrame(i); }
-            }
+            drawContext.RenderApngToFile(path, delayHundredths, vm.ApngLoop, vm.ApngBlinkCycles, vm.ApngStartFrame, vm.ApngEndFrame, outputSize);
 
-            // Resize each frame if the user picked a non-1x scale.
-            if (System.Math.Abs(vm.Scale - 1.0) > 0.001)
-            {
-                apngImage.Mutate(ctx => ctx.Resize(vm.OutputWidth, vm.OutputHeight));
-            }
-
-            await apngImage.SaveAsPngAsync(path);
             return;
         }
 

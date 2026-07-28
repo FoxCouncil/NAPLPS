@@ -3,6 +3,7 @@
 using NAPLPS.Drawing;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 
 namespace NAPLPSTests.Base;
 
@@ -96,6 +97,131 @@ public class ApngWriterTests
                 System.IO.File.Delete(memPath);
                 System.IO.File.Delete(strPath);
             }
+        }
+    }
+
+    /// <summary>
+    /// Blink frames were the one thing the streaming path could not do, which kept the app's export
+    /// on the in-memory encoder. Pin that they now agree frame for frame, on a file that actually
+    /// blinks - otherwise this passes trivially.
+    /// </summary>
+    [TestMethod]
+    public void StreamedBlinkFramesMatchInMemory()
+    {
+        const string rel = "blinky.nap";
+        const int cycles = 2;
+
+        var full = Path.Combine(NAPLPSTests.Visual.VisualTestContext.ExamplesDir, rel);
+        var memPath = Path.Combine(Path.GetTempPath(), $"blink-mem-{Guid.NewGuid():N}.apng");
+        var strPath = Path.Combine(Path.GetTempPath(), $"blink-str-{Guid.NewGuid():N}.apng");
+
+        try
+        {
+            int withoutBlink;
+            int withBlink;
+
+            using (var ctx = new DrawContext(NaplpsFormat.FromFile(full, null), new SixLabors.ImageSharp.Size(1024, 768)))
+            using (var apng = ctx.RenderToApng(5, false, cycles))
+            {
+                withBlink = apng.Frames.Count;
+                apng.SaveAsPng(memPath);
+            }
+
+            using (var ctx = new DrawContext(NaplpsFormat.FromFile(full, null), new SixLabors.ImageSharp.Size(1024, 768)))
+            {
+                withoutBlink = ctx.RenderApngToFile(strPath, 5, false, 0);
+            }
+
+            Assert.IsGreaterThan(withoutBlink, withBlink, $"{rel} must actually produce blink frames or this test proves nothing");
+
+            using (var ctx = new DrawContext(NaplpsFormat.FromFile(full, null), new SixLabors.ImageSharp.Size(1024, 768)))
+            {
+                ctx.RenderApngToFile(strPath, 5, false, cycles);
+            }
+
+            using var mem = Image.Load<Rgba32>(memPath);
+            using var str = Image.Load<Rgba32>(strPath);
+
+            Assert.AreEqual(mem.Frames.Count, str.Frames.Count, "blink frame count");
+
+            var a = new byte[mem.Width * mem.Height * 4];
+            var b = new byte[str.Width * str.Height * 4];
+
+            for (int f = 0; f < mem.Frames.Count; f++)
+            {
+                using var fa = mem.Frames.CloneFrame(f);
+                using var fb = str.Frames.CloneFrame(f);
+
+                fa.CopyPixelDataTo(a);
+                fb.CopyPixelDataTo(b);
+
+                Assert.IsTrue(a.AsSpan().SequenceEqual(b), $"blink frame {f} differs");
+            }
+        }
+        finally
+        {
+            System.IO.File.Delete(memPath);
+            System.IO.File.Delete(strPath);
+        }
+    }
+
+    /// <summary>
+    /// The export dialog clips to a frame range and scales; both used to happen by mutating a fully
+    /// materialised animation. Streaming applies them per frame instead, so pin the result.
+    /// </summary>
+    [TestMethod]
+    public void FrameRangeAndScaleApplyWhileStreaming()
+    {
+        const string rel = "bb8.nap";
+
+        var full = Path.Combine(NAPLPSTests.Visual.VisualTestContext.ExamplesDir, rel);
+        var allPath = Path.Combine(Path.GetTempPath(), $"range-all-{Guid.NewGuid():N}.apng");
+        var cutPath = Path.Combine(Path.GetTempPath(), $"range-cut-{Guid.NewGuid():N}.apng");
+
+        try
+        {
+            int total;
+
+            using (var ctx = new DrawContext(NaplpsFormat.FromFile(full, null), new SixLabors.ImageSharp.Size(1024, 768)))
+            {
+                total = ctx.RenderApngToFile(allPath);
+            }
+
+            Assert.IsGreaterThan(6, total, "need enough frames to clip meaningfully");
+
+            // Keep frames 3..6 (1-based inclusive) at half size.
+            using (var ctx = new DrawContext(NaplpsFormat.FromFile(full, null), new SixLabors.ImageSharp.Size(1024, 768)))
+            {
+                int written = ctx.RenderApngToFile(cutPath, 5, false, 0, 3, 6, new SixLabors.ImageSharp.Size(512, 384));
+
+                Assert.AreEqual(4, written, "frames 3..6 inclusive is four frames");
+            }
+
+            using var all = Image.Load<Rgba32>(allPath);
+            using var cut = Image.Load<Rgba32>(cutPath);
+
+            Assert.AreEqual(4, cut.Frames.Count);
+            Assert.AreEqual(512, cut.Width);
+            Assert.AreEqual(384, cut.Height);
+
+            // The kept range must be the requested one, not just any four frames: frame 0 of the
+            // clipped file is the scaled frame 2 (0-based) of the full render.
+            using var expected = all.Frames.CloneFrame(2);
+            expected.Mutate(c => c.Resize(512, 384));
+
+            using var actual = cut.Frames.CloneFrame(0);
+
+            var e = new byte[512 * 384 * 4];
+            var g = new byte[512 * 384 * 4];
+            expected.CopyPixelDataTo(e);
+            actual.CopyPixelDataTo(g);
+
+            Assert.IsTrue(e.AsSpan().SequenceEqual(g), "clipped output should start at the requested frame");
+        }
+        finally
+        {
+            System.IO.File.Delete(allPath);
+            System.IO.File.Delete(cutPath);
         }
     }
 
