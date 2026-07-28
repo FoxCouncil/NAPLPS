@@ -16,6 +16,16 @@ public class NaplpsSequence(NaplpsState state, NaplpsCommand command)
     /// </summary>
     public bool IsSynthetic { get; set; }
 
+    /// <summary>
+    /// The exact coded-stream bytes this sequence consumed, captured when a command's bytes
+    /// straddle a macro-splice boundary (a body opcode taking operands from the coded stream,
+    /// or coded-stream operands continuing into a body). When set, serialization emits these
+    /// bytes verbatim: reconstructing opcode+operands would leak macro-body bytes into the
+    /// coded stream and drop the invocation byte consumed mid-operand.
+    /// </summary>
+    [JsonIgnore]
+    public byte[]? RawCodedBytes { get; set; }
+
     public void Deconstruct(out NaplpsCommand command, out NaplpsState state)
     {
         command = Command;

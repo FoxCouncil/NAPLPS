@@ -13,7 +13,26 @@ public static class Extensions
 
     public static bool IsEOF(this BinaryReader stream)
     {
+        // Spliced macro-body bytes are read before the base stream (X3.110 5.5 expansion).
+        if (stream is SpliceBinaryReader { HasInjected: true })
+        {
+            return false;
+        }
+
         return stream.BaseStream.IsEOF();
+    }
+
+    /// <summary>Bytes still readable, counting pending spliced macro-body bytes first.</summary>
+    public static long BytesRemaining(this BinaryReader reader)
+    {
+        var remaining = reader.BaseStream.CanSeek ? reader.BaseStream.Length - reader.BaseStream.Position : 0;
+
+        if (reader is SpliceBinaryReader splice)
+        {
+            remaining += splice.InjectedRemaining;
+        }
+
+        return remaining;
     }
 
     public static bool IsEOF(this Stream stream)
@@ -24,6 +43,12 @@ public static class Extensions
     // Stream Extensions
     public static byte PeekByte(this BinaryReader reader)
     {
+        // Pending spliced macro-body bytes are what a read would return next.
+        if (reader is SpliceBinaryReader splice && splice.TryPeekInjected(out var injected))
+        {
+            return injected;
+        }
+
         // Remember the original position
         long originalPosition = reader.BaseStream.Position;
 

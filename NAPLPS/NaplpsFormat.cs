@@ -61,7 +61,10 @@ public partial class NaplpsFormat
         SystemType = forcedSystemType ?? DetectSystemType(reader);
         ApplySystemDefaults();
 
-        Commands = ReadStream(reader);
+        // Parse through a splice reader so macro invocations expand by injecting body bytes
+        // into the coded stream at the invocation byte (X3.110 5.5) - command operands may
+        // then flow across the splice boundary in both directions.
+        Commands = ReadStream(new SpliceBinaryReader(reader.BaseStream));
 
         IsValid = true;
     }
@@ -299,6 +302,15 @@ public partial class NaplpsFormat
 
         foreach (var command in Commands)
         {
+            // A splice-boundary sequence serializes as the exact real-stream bytes it
+            // consumed: reconstructing opcode+operands would leak macro-body bytes into the
+            // coded stream and drop the invocation byte consumed mid-operand.
+            if (command.RawCodedBytes is { Length: > 0 } rawBytes)
+            {
+                writer.Write(rawBytes);
+                continue;
+            }
+
             // Parser-materialized (macro expansion) sequences are not part of the coded stream.
             if (command.IsSynthetic)
             {
@@ -340,6 +352,17 @@ public partial class NaplpsFormat
     private List<NaplpsSequence> ReadStream(BinaryReader reader, bool isMacroExpansion = false)
     {
         var commands = new List<NaplpsSequence>();
+        var splice = reader as SpliceBinaryReader;
+
+        // Expansion sequences render but are not coded input; commands materialized while the
+        // opcode byte came from a spliced macro body are marked synthetic after the fact.
+        static void MarkSynthetic(List<NaplpsSequence> list, int fromIndex)
+        {
+            for (var i = fromIndex; i < list.Count; i++)
+            {
+                list[i].IsSynthetic = true;
+            }
+        }
 
         try
         {
@@ -354,6 +377,15 @@ public partial class NaplpsFormat
                     break;
                 }
 
+                // Byte-provenance snapshot: whether this command's opcode comes from a spliced
+                // macro body, and how far along the real stream and the injection queue are.
+                // The deltas after the command parses attribute its bytes to body vs stream.
+                bool opcodeInjected = splice?.HasInjected == true;
+                long injectedBefore = splice?.InjectedConsumed ?? 0;
+                long injectionsBefore = splice?.InjectionCount ?? 0;
+                long realStart = splice != null ? reader.BaseStream.Position : 0;
+                int commandsBefore = commands.Count;
+
                 var opcode = reader.ReadByte();
 
                 // We operate in 7 bit mode until we get 8 bits,
@@ -366,21 +398,45 @@ public partial class NaplpsFormat
                 // Buffered modes: macro/DRCS/texture definition consume bytes until END
                 if (HandleBufferedByte(opcode, reader, commands))
                 {
+                    if (opcodeInjected)
+                    {
+                        MarkSynthetic(commands, commandsBefore);
+                    }
+
                     continue;
                 }
 
                 // Macro invocation: a byte resolved through a G-set designated as the macro set
-                // (via SS3/LS3 into a macro-designated slot) expands that macro at parse time,
-                // injecting its body commands here, instead of drawing a character.
+                // (via SS3/LS3 into a macro-designated slot) expands that macro at parse time
+                // instead of drawing a character.
                 if (State.IsMacroByte(opcode))
                 {
                     State.PendingSingleShift = null; // the single-shift, if any, is consumed here
 
                     // X3.110 section 5.5: the coded stream carries only the single invocation
                     // byte. Preserve it as a raw (non-drawing) command so ToBytes round-trips;
-                    // the expansion added below is presentation output, marked synthetic.
-                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, opcode, [])));
-                    ExecuteMacro(new NaplpsOperands(new byte[] { opcode }), commands);
+                    // everything the expansion produces is presentation output, marked synthetic.
+                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, opcode, [])) { IsSynthetic = opcodeInjected });
+
+                    if (splice != null)
+                    {
+                        // Splice the body into the coded stream at the invocation byte (5.5).
+                        // Operands may then flow across the boundary in both directions: a body
+                        // ending in a bare opcode draws its operands from the bytes following
+                        // the invocation, and a body beginning with numeric data extends the
+                        // command preceding it (see ReadOperands).
+                        if (State.Macros.TryGetValue((char)opcode, out var macroBody) && macroBody.Length > 0)
+                        {
+                            splice.InjectFront(macroBody);
+                        }
+                    }
+                    else
+                    {
+                        // Isolated sub-streams (DEFP replay, DRCS parsing) keep the recursive
+                        // expansion - they have no outer coded stream to splice into.
+                        ExecuteMacro(new NaplpsOperands(new byte[] { opcode }), commands);
+                    }
+
                     continue;
                 }
 
@@ -392,7 +448,7 @@ public partial class NaplpsFormat
                     RecordError(NaplpsErrorSeverity.Error, NaplpsErrorType.UnknownOpcode, "Unknown opcode in InUseTable", opcode, reader.BaseStream.Position - 1);
                     // Preserve the unknown byte so ToBytes round-trips. The renderer won't
                     // draw it (not IDrawable), but the byte survives serialization.
-                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, opcode, [])));
+                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, opcode, [])) { IsSynthetic = opcodeInjected });
                     continue;
                 }
 
@@ -406,7 +462,7 @@ public partial class NaplpsFormat
                     // Preserve the orphan byte as a bare NaplpsCommand so it round-trips
                     // through ToBytes() — historically these bytes (e.g. 0x41 in card1.nap
                     // after ESC D) were silently dropped, breaking byte-level round-trip.
-                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, opcode, [])));
+                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, opcode, [])) { IsSynthetic = opcodeInjected });
                     continue;
                 }
 
@@ -416,6 +472,13 @@ public partial class NaplpsFormat
                 if (commandType == typeof(ControlCommand) && commandParameters.Count == 1)
                 {
                     HandleControlCommand((NaplpsControlCommands)commandParameters[0], reader, additionalParameters, commands);
+
+                    // Sequences the handler materialized (e.g. DEFP replay) inside an
+                    // expansion are presentation output like the rest of the expansion.
+                    if (opcodeInjected)
+                    {
+                        MarkSynthetic(commands, commandsBefore);
+                    }
 
                     // Re-clone AFTER control command so the sequence's state snapshot
                     // reflects changes made by the handler (cursor position, scroll flag, etc.)
@@ -427,7 +490,22 @@ public partial class NaplpsFormat
 
                 if (command != null)
                 {
-                    commands.Add(new NaplpsSequence(currentState, command));
+                    var sequence = new NaplpsSequence(currentState, command) { IsSynthetic = opcodeInjected };
+
+                    // A command whose parse crossed a splice boundary - it consumed body bytes,
+                    // or it consumed an invocation byte mid-operand (a new injection) - may mix
+                    // real coded-stream bytes with body bytes. Capture exactly the real bytes so
+                    // serialization stays byte-exact: they include any invocation byte consumed
+                    // mid-operand, and exclude the body bytes, which serialize once inside their
+                    // definition.
+                    if (splice != null
+                        && (splice.InjectedConsumed != injectedBefore || splice.InjectionCount != injectionsBefore)
+                        && reader.BaseStream.Position > realStart)
+                    {
+                        sequence.RawCodedBytes = ReadRealRange(reader, realStart, reader.BaseStream.Position);
+                    }
+
+                    commands.Add(sequence);
 
                     // Track the last spacing character so a following REPEAT can advance the pen
                     // across the repeated cells (see HandleControlCommand's Repeat branch).
@@ -447,7 +525,59 @@ public partial class NaplpsFormat
             RecordError(NaplpsErrorSeverity.Error, NaplpsErrorType.UnexpectedEndOfStream, "Stream ended unexpectedly during parsing");
         }
 
+        // Only the top-level parse (always spliced) flushes: recursive sub-stream parses
+        // (DEFP replay, DRCS data) must not disturb definition state they did not open.
+        if (splice != null)
+        {
+            FlushOpenDefinitionBuffers(commands);
+        }
+
         return commands;
+    }
+
+    /// <summary>
+    /// A definition left open at end of stream - a stray DEF byte in embedded text (e.g. the
+    /// 0x80 inside a UTF-8 em-dash), a trailer byte, or a truncated file - still owns its
+    /// buffered bytes. Emit them as raw commands so serialization stays byte-exact. The
+    /// macro/DRCS/texture itself is not stored: it was never terminated.
+    /// </summary>
+    private void FlushOpenDefinitionBuffers(List<NaplpsSequence> commands)
+    {
+        if (State.MacroBeingDefined != null)
+        {
+            State.MacroBeingDefined = null;
+
+            foreach (var b in State.MacroBuffer)
+            {
+                commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, b, [])));
+            }
+
+            State.MacroBuffer.Clear();
+        }
+
+        if (State.DrcsStartCode != null)
+        {
+            State.DrcsStartCode = null;
+
+            foreach (var b in State.DrcsBuffer)
+            {
+                commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, b, [])));
+            }
+
+            State.DrcsBuffer.Clear();
+        }
+
+        if (State.TextureBeingDefined != null)
+        {
+            State.TextureBeingDefined = null;
+
+            foreach (var b in State.TextureBuffer)
+            {
+                commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, b, [])));
+            }
+
+            State.TextureBuffer.Clear();
+        }
     }
 
     /// <summary>
@@ -469,7 +599,12 @@ public partial class NaplpsFormat
                 reader.ReadByte();
             }
 
-            if (escEnd || IsEndCommand(opcode))
+            // X3.110 6.2.2: a DEF MACRO is ALSO terminated by the next DEF MACRO, DEFP
+            // MACRO, DEFT MACRO, DEF DRCS, or DEF TEXTURE. The Prodigy logon templates
+            // (TL80TB10) chain dozens of definitions this way with no ENDs at all.
+            bool defTerminated = !escEnd && !IsEndCommand(opcode) && IsDefinitionCommand(opcode);
+
+            if (escEnd || defTerminated || IsEndCommand(opcode))
             {
                 var macroName = State.MacroBeingDefined.Value;
                 var macroType = State.MacroDefType;
@@ -484,8 +619,13 @@ public partial class NaplpsFormat
 
                 State.MacroBuffer.Clear();
 
-                // Inject the END command itself, carrying the ESC form's final byte when present.
-                commands.Add(new NaplpsSequence(State.Clone(), MakeEndCommand(opcode, escEnd)));
+                if (!defTerminated)
+                {
+                    // Inject the END command itself, carrying the ESC form's final byte when
+                    // present. A definition-terminated definition has no END byte to inject -
+                    // the terminating DEF byte is processed as its own command below.
+                    commands.Add(new NaplpsSequence(State.Clone(), MakeEndCommand(opcode, escEnd)));
+                }
 
                 if (macroType == 1 && State.Macros.TryGetValue(macroName, out var macroData))
                 {
@@ -499,6 +639,13 @@ public partial class NaplpsFormat
                         seq.IsSynthetic = true;
                         commands.Add(seq);
                     }
+                }
+
+                if (defTerminated)
+                {
+                    // Hand the terminating DEF byte back to normal processing so it starts
+                    // the next definition (or DRCS/texture mode) itself.
+                    return false;
                 }
             }
             else
@@ -575,6 +722,25 @@ public partial class NaplpsFormat
     /// <summary>
     /// Checks if the given opcode maps to the END control command.
     /// </summary>
+    /// <summary>
+    /// True when the byte is one of the five C1 definition controls (DEF MACRO, DEFP MACRO,
+    /// DEFT MACRO, DEF DRCS, DEF TEXTURE) - each of which terminates a definition in
+    /// progress (X3.110 6.2.2-6.2.4).
+    /// </summary>
+    private bool IsDefinitionCommand(byte opcode)
+    {
+        var cmdRef = State.InUseTable[opcode];
+
+        if (cmdRef?.CommandType != typeof(ControlCommand) || cmdRef.Parameters.Count != 1)
+        {
+            return false;
+        }
+
+        var c1 = (NaplpsControlCommands)cmdRef.Parameters[0];
+
+        return c1 is DefMacro or DefPMacro or DefTMacro or DefDRCS or DefTexture;
+    }
+
     private bool IsEndCommand(byte opcode)
     {
         var cmdRef = State.InUseTable[opcode];
@@ -593,13 +759,54 @@ public partial class NaplpsFormat
 
         if (operandType != NaplpsOperandType.None)
         {
-            while (IsValidNumericalDataNext(reader))
+            while (true)
             {
-                operands.Add(reader.ReadByte());
+                if (IsValidNumericalDataNext(reader))
+                {
+                    operands.Add(reader.ReadByte());
+                    continue;
+                }
+
+                // X3.110 5.5: a macro call splices its body into the coded stream at the
+                // invocation byte, so operand data flows across the boundary. When the next
+                // byte invokes a defined macro, consume it and keep scanning inside the
+                // spliced body - a body that begins with numeric data extends THIS command,
+                // and a body that begins with an opcode ends the scan there naturally.
+                if (reader is SpliceBinaryReader splice && !reader.IsEOF())
+                {
+                    var next = reader.PeekByte();
+
+                    if (State.IsMacroByte(next) && State.Macros.TryGetValue((char)next, out var macroBody) && macroBody.Length > 0)
+                    {
+                        reader.ReadByte();
+                        State.PendingSingleShift = null; // the single-shift, if any, is consumed here
+                        splice.InjectFront(macroBody);
+                        continue;
+                    }
+                }
+
+                break;
             }
         }
 
         return operands;
+    }
+
+    /// <summary>
+    /// Re-reads a range of the underlying coded stream. Used to capture the exact real bytes
+    /// a splice-boundary command consumed (see <see cref="NaplpsSequence.RawCodedBytes"/>).
+    /// </summary>
+    private static byte[] ReadRealRange(BinaryReader reader, long start, long end)
+    {
+        var stream = reader.BaseStream;
+        var saved = stream.Position;
+        var buffer = new byte[end - start];
+
+        stream.Position = start;
+        stream.ReadExactly(buffer);
+        stream.Position = saved;
+
+        return buffer;
     }
 
     /// <summary>
@@ -666,9 +873,16 @@ public partial class NaplpsFormat
         else if (controlCommand == Cancel)
         {
             // ANSI X3.110: CAN terminates all currently executing macros immediately.
-            // Effect is immediate — not queued.
+            // Effect is immediate — not queued. Under spliced expansion the pending
+            // injected bytes ARE the executing macros: drop them all.
             State.MacroBeingDefined = null;
             State.MacroBuffer.Clear();
+
+            if (reader is SpliceBinaryReader splice)
+            {
+                splice.ClearInjected();
+            }
+
             State.IsCancelRequested = true;
         }
         else if (controlCommand == Bell)
@@ -737,9 +951,12 @@ public partial class NaplpsFormat
         else if (controlCommand == DoubleHeight) { State.TextSizeMode = 3; State.CharSize = new Vector2(1.0f / 40.0f, 10.0f / 128.0f); }
         else if (controlCommand == DoubleSize) { State.TextSizeMode = 4; State.CharSize = new Vector2(2.0f / 40.0f, 10.0f / 128.0f); }
         // Macro/DRCS/texture definitions
-        else if (controlCommand == DefMacro) { StartMacroDefinition(additionalParameters, 0); }
-        else if (controlCommand == DefPMacro) { StartMacroDefinition(additionalParameters, 1); }
-        else if (controlCommand == DefTMacro) { StartMacroDefinition(additionalParameters, 2); }
+        // The macro NAME is the byte following the control (X3.110 6.2.2). The 8-bit C1
+        // forms (0x80-0x82) arrive here with no operands read, so consume the name from the
+        // stream; the 7-bit ESC forms pre-read it into additionalParameters.
+        else if (controlCommand == DefMacro) { StartMacroDefinition(ReadMacroName(reader, additionalParameters), 0); }
+        else if (controlCommand == DefPMacro) { StartMacroDefinition(ReadMacroName(reader, additionalParameters), 1); }
+        else if (controlCommand == DefTMacro) { StartMacroDefinition(ReadMacroName(reader, additionalParameters), 2); }
         // ANSI X3.110 §6.1.3.3: SS2 invokes G2 into the in-use table for ONE next byte (nonlocking).
         // Spec §5.5 macros are invoked by designating the Macro Set into G1/G2/G3 then transmitting
         // a character from that invoked area — NOT via SS2.
@@ -971,6 +1188,21 @@ public partial class NaplpsFormat
         State.Pen = pen;
     }
 
+    /// <summary>
+    /// Returns operands already carrying the macro name (the 7-bit ESC path pre-reads it),
+    /// or consumes the name byte from the stream for the direct 8-bit C1 forms - appending
+    /// it to the command's operands so serialization stays byte-exact.
+    /// </summary>
+    private static NaplpsOperands ReadMacroName(BinaryReader reader, NaplpsOperands operands)
+    {
+        if (operands.Count == 0 && !reader.IsEOF())
+        {
+            operands.Add(reader.ReadByte());
+        }
+
+        return operands;
+    }
+
     private void StartMacroDefinition(NaplpsOperands operands, byte macroType)
     {
         if (operands.Count > 0)
@@ -1126,17 +1358,17 @@ public partial class NaplpsFormat
         // NSR cursor positioning: if two bytes 0x40-0x7F follow, decode row/column.
         // Origin is UPPER LEFT (row 0, col 0 = top-left) - different from 0x1C which uses bottom-left.
         // Capture both bytes into additionalParameters so the serializer re-emits them on ToBytes().
-        if (reader.BaseStream.Position + 2 <= reader.BaseStream.Length)
+        if (reader.BytesRemaining() >= 2)
         {
             // PeekChar() UTF-8-decodes the upcoming bytes and THROWS on a multi-byte lead
             // (e.g. NSR followed by 0xF0..): peek the raw byte via the stream instead.
-            var peek1 = PeekByte(reader);
+            var peek1 = reader.PeekByte();
 
             if (peek1 >= 0x40 && peek1 <= 0x7F)
             {
                 byte rowByte = reader.ReadByte();
                 additionalParameters.Add(rowByte);
-                int peek2 = PeekByte(reader);
+                int peek2 = reader.PeekByte();
 
                 if (peek2 >= 0x40 && peek2 <= 0x7F)
                 {
