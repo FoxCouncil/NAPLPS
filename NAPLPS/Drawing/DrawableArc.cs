@@ -107,7 +107,8 @@ public class DrawableArc : Drawable, IDrawable
 
                 if (circlePelPattern != null)
                 {
-                    var (ox0, ox1, oy0, oy1, pelMajor) = GetDashPel(size);
+                    // A closed ring has no dominant axis; keep the X-based dash unit.
+                    var (ox0, ox1, oy0, oy1, pelMajor, _) = GetDashPel(size);
                     DrawableLine.PlotDashedPolyline(image, circlePts, asSet: false, ox0, ox1, oy0, oy1, pelMajor, circlePelPattern, circleColor,
                         TextureGapColor(circleCmd.ColorMode, circBg));
                 }
@@ -260,7 +261,8 @@ public class DrawableArc : Drawable, IDrawable
                     var pelPattern = solidOutline ? null : DrawableLine.PelDashPattern(_command.Texture.LineTexture);
                     if (pelPattern != null)
                     {
-                        var (ox0, ox1, oy0, oy1, pelMajor) = GetDashPel(size);
+                        // A curved path has no dominant axis; keep the X-based dash unit.
+                        var (ox0, ox1, oy0, oy1, pelMajor, _) = GetDashPel(size);
                         DrawableLine.PlotDashedPolyline(image, arcPoints, asSet: false, ox0, ox1, oy0, oy1, pelMajor, pelPattern, outlineColor,
                             TextureGapColor(fillableCmd.ColorMode, cmdBg));
                     }
