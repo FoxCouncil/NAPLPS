@@ -7,11 +7,28 @@
 #
 # Both jobs are gated by the "appstore" environment: a human approves each release run
 # before any signing secret is released. All actions are SHA-pinned.
+#
+# workflow_dispatch runs the same signing path without cutting a release: it takes a version
+# instead of reading the tag, and the result is uploaded as a build artifact rather than
+# published. That is the only way to exercise Azure signing at all - the federated credential is
+# OIDC scoped to the `appstore` environment, so the token exists only inside a run here.
 name: Release
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to stamp the build with (no leading v)'
+        required: true
+        default: '0.0.0-test'
+      platform:
+        description: 'Which side to build'
+        required: true
+        default: 'windows'
+        type: choice
+        options: [windows, macos, both]
 
 permissions:
   contents: write
@@ -21,11 +38,21 @@ jobs:
     name: macOS (notarized dmg)
     runs-on: macos-15
     environment: appstore
+    if: github.event_name == 'push' || inputs.platform == 'macos' || inputs.platform == 'both'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+
+      # A manual run has no tag to read the version from.
+      - name: Resolve version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          fi
 
       - name: Import Developer ID certificate
         env:
@@ -64,7 +91,6 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           DMG="$RUNNER_TEMP/NAPLPS-Toolbox-$VERSION-macos-arm64.dmg"
           STAGE="$RUNNER_TEMP/dmg-stage"
           mkdir -p "$STAGE"
@@ -81,16 +107,28 @@ jobs:
           echo "DMG=$DMG" >> "$GITHUB_ENV"
 
       - name: Attach to GitHub Release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes 2>/dev/null || true
           gh release upload "$GITHUB_REF_NAME" "$DMG" --clobber
 
+      # Manual runs prove the signing path without publishing anything.
+      - name: Upload dmg as artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-dmg
+          path: ${{ env.DMG }}
+          if-no-files-found: error
+          retention-days: 7
+
   windows:
     name: Windows (signed installer)
     runs-on: windows-latest
     environment: appstore
+    if: github.event_name == 'push' || inputs.platform == 'windows' || inputs.platform == 'both'
     permissions:
       contents: write
       id-token: write
@@ -99,6 +137,14 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
+
+      # A manual run has no tag to read the version from.
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' }
+               else { $env:GITHUB_REF_NAME -replace '^v', '' }
+          "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Publish app (win-x64, self-contained)
         run: dotnet publish NAPLPSApp/NAPLPSApp.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o "${{ runner.temp }}\publish"
@@ -125,9 +171,8 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME -replace '^v', ''
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
-            "/DMyAppVersion=$version" `
+            "/DMyAppVersion=$env:VERSION" `
             "/DPublishDir=${{ runner.temp }}\publish" `
             "/O${{ runner.temp }}\installer" `
             windows\installer.iss
@@ -145,15 +190,42 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
+      # Naming happens for both paths; only publishing is tag-only.
+      - name: Name the installer
+        shell: pwsh
+        run: |
+          $out = "${{ runner.temp }}\installer\NAPLPS-Toolbox-Setup.exe"
+          $final = "${{ runner.temp }}\installer\NAPLPS-Toolbox-$env:VERSION-windows-x64-Setup.exe"
+          Move-Item $out $final
+          "INSTALLER=$final" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # Proves the signature actually took, rather than trusting the signing step's exit code.
+      - name: Verify signature
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature $env:INSTALLER
+          "Status : $($sig.Status)"
+          "Signer : $($sig.SignerCertificate.Subject)"
+          "Issuer : $($sig.SignerCertificate.Issuer)"
+          "Stamp  : $($sig.TimeStamperCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "installer signature is $($sig.Status), expected Valid" }
+
       - name: Attach to GitHub Release
+        if: github.event_name == 'push'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = $env:GITHUB_REF_NAME -replace '^v', ''
-          $out = "${{ runner.temp }}\installer\NAPLPS-Toolbox-Setup.exe"
-          $final = "${{ runner.temp }}\installer\NAPLPS-Toolbox-$version-windows-x64-Setup.exe"
-          Move-Item $out $final
           gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --generate-notes 2>$null
           if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 }
-          gh release upload $env:GITHUB_REF_NAME $final --clobber
+          gh release upload $env:GITHUB_REF_NAME $env:INSTALLER --clobber
+
+      # Manual runs prove the signing path without publishing anything.
+      - name: Upload installer as artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-installer
+          path: ${{ env.INSTALLER }}
+          if-no-files-found: error
+          retention-days: 7
