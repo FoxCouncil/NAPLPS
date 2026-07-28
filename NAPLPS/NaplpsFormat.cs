@@ -153,6 +153,13 @@ public partial class NaplpsFormat
         {
             case NaplpsSystemType.Prodigy:
             State.ColorMap = new Dictionary<byte, NaplpsColor>(NaplpsState.ColorMapProdigyDefaults);
+            // Prodigy applications (GCU.EXE, COOK.EXE, the reception client) send a standard
+            // prologue to MVDI before presenting an object: a DOMAIN (a1 c8 c0 c0 c9) whose
+            // logical pel is 1/256, and a TEXT command (a2 c0 c0 c0 c1 f2) setting the 6x10
+            // char field on the 256 logical grid. Objects are authored against that ambient
+            // state, not the decoder's power-on defaults (zero pel, 1/40 char field).
+            State.CharSize = new Vector2(3.0f / 128.0f, 5.0f / 128.0f);
+            State.LogicalPel = new Vector2(1.0f / 256.0f, 1.0f / 256.0f);
             break;
 
             case NaplpsSystemType.Telidon:
