@@ -620,10 +620,24 @@ public class NaplpsState
     [JsonIgnore]
     public bool IsCancelRequested { get; set; } = false;
 
-    /// <summary>Pen position at the last word break point (space or special char) for word wrap</summary>
+    /// <summary>
+    /// Cursor position where the current run of characters began - the last place the cursor was
+    /// put by something other than a character advance or an automatic CR-LF. Used to decide
+    /// whether a run is flowing inside the active field and therefore subject to its auto-wrap.
+    /// Maintained by <c>AsciiCharCommand</c> together with <see cref="LastCharPen"/>.
+    /// </summary>
     [Browsable(false)]
     [JsonIgnore]
-    public Vector3 LastWordBreakPen { get; set; } = new();
+    public Vector3 TextRunOrigin { get; set; } = new();
+
+    /// <summary>
+    /// Cursor position left behind by the previous character. A mismatch against
+    /// <see cref="Pen"/> on the next character means the cursor was moved externally, which
+    /// starts a new run.
+    /// </summary>
+    [Browsable(false)]
+    [JsonIgnore]
+    public Vector3? LastCharPen { get; set; }
 
     /// <summary>Blink mode causes subsequent text to blink</summary>
     [Category("C1 Controls")]

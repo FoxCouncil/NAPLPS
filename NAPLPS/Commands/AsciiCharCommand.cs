@@ -36,9 +36,18 @@ public class AsciiCharCommand : NaplpsCommand
     public bool IsNonSpacing { get; }
 
     /// <summary>
-    /// True if this character was discarded (space at end of line during word wrap).
+    /// True if this character was discarded (a space that hit the field's far edge is consumed
+    /// by the automatic CR-LF and never drawn).
     /// </summary>
     public bool IsDiscarded { get; }
+
+    /// <summary>
+    /// Pen position this glyph is drawn at, captured after any automatic CR-LF and before the
+    /// character advance. The renderer uses this instead of the sequence's state snapshot:
+    /// the snapshot is cloned before the command executes, so on the Prodigy
+    /// check-before-draw path it cannot see this command's own wrap.
+    /// </summary>
+    public Vector3 DrawPen { get; private set; }
 
     /// <summary>
     /// ANSI X3.110 §5.3.2.1: when a non-spacing accent precedes this character, it is
@@ -76,6 +85,7 @@ public class AsciiCharCommand : NaplpsCommand
             // Pen is intentionally NOT advanced.
             state.PendingAccentChar = asciiCharacter;
             state.PendingAccentCode = SupplementaryCode;
+            DrawPen = state.Pen;
         }
 
         if (!IsNonSpacing)
@@ -90,79 +100,120 @@ public class AsciiCharCommand : NaplpsCommand
                 state.PendingAccentCode = null;
             }
 
-            MovePen(state);
+            // A cursor position this class did not leave behind means something else moved the
+            // cursor (POINT SET ABSOLUTE, FIELD, an explicit CR/LF/APH), which starts a new run.
+            if (!state.LastCharPen.HasValue || state.LastCharPen.Value != state.Pen)
+            {
+                state.TextRunOrigin = state.Pen;
+            }
+
+            // The MVDI flow is device-verified against Prodigy hardware captures only, so it
+            // is gated to Prodigy content. Generic NAPLPS keeps the legacy wrap (check AFTER
+            // drawing, with a tolerance band) - the corpus this library grew up on was
+            // authored against renderers that demonstrably do NOT wrap at the exact edge,
+            // and there is no generic-NAPLPS oracle to calibrate a change against.
+            if (state.SystemType == NaplpsSystemType.Prodigy)
+            {
+                // MVDI tests the pending character field against the field's far edge BEFORE
+                // drawing, at the exact edge, character by character. Device-verified on the
+                // polaroid-ad capture: its LOOK label's 'O' ends exactly ON the edge and
+                // fits, the second 'O' pokes past and wraps, and "OK" lands at the line
+                // start of the circularly-repositioned row while "LO" stays behind - a pure
+                // character-level break, no word retraction, regardless of the WORD WRAP
+                // mode. X3.110: "if the subsequent cursor movement would cause part of the
+                // character field to be ... outside the active field, then an automatic
+                // <carriage return> <linefeed> is executed."
+                if (FieldWrapArmed(state) && CellExceedsFarEdge(state))
+                {
+                    PerformAutoWrap(state);
+                    state.AutoWrapJustOccurred = true;
+                }
+
+                DrawPen = state.Pen;
+                MovePen(state);
+            }
+            else
+            {
+                // Legacy generic-NAPLPS wrap: the glyph draws at the current pen, the pen
+                // advances, and only then is the field boundary tested - with a tolerance
+                // band on the Right path to match the historical renderers' integer
+                // arithmetic. In word wrap mode a space that trips the boundary is discarded.
+                DrawPen = state.Pen;
+                MovePen(state);
+
+                if (LegacyCheckFieldBoundary(state))
+                {
+                    if (state.IsWordWrapMode && asciiCharacter == ' ')
+                    {
+                        IsDiscarded = true;
+                    }
+
+                    LegacyPerformAutoWrap(state);
+                    state.AutoWrapJustOccurred = true;
+                }
+            }
+
             state.SyncAfterTextMove();
-
-            // ANSI X3.110: "if the subsequent cursor movement would cause part of the
-            // character field to be outside the unit screen or outside the active field,
-            // then an automatic <carriage return> <linefeed> is executed."
-            // Check AFTER advancing — if the new pen position is outside the field, wrap.
-            if (CheckFieldBoundary(state))
-            {
-                // In word wrap mode, discard trailing spaces instead of wrapping
-                if (state.IsWordWrapMode && asciiCharacter == ' ')
-                {
-                    // Undo the pen advance — space is discarded
-                    IsDiscarded = true;
-                }
-
-                PerformAutoWrap(state);
-                state.AutoWrapJustOccurred = true;
-            }
-
-            // Track last break position for word wrap
-            if (state.IsWordWrapMode && !IsDiscarded)
-            {
-                if (asciiCharacter == ' ' || WordBreakChars.Contains(asciiCharacter))
-                {
-                    state.LastWordBreakPen = state.Pen;
-                }
-            }
+            state.LastCharPen = state.Pen;
         }
     }
 
     /// <summary>
-    /// Checks if the pen position (after character advance) is outside the field boundary.
-    /// Returns true if it exceeds the boundary and a wrap is needed.
-    /// Does NOT perform the wrap — caller decides (may discard space in word wrap mode).
+    /// True when the active field's automatic wrap governs the character about to be placed:
+    /// a field is set, the pen's row lies in the field's perpendicular band, and the current
+    /// run began inside the field along the text path. Whether the character actually trips
+    /// the wrap is <see cref="CellExceedsFarEdge"/>. Prodigy-only; the generic path uses
+    /// <see cref="LegacyCheckFieldBoundary"/>.
     /// </summary>
-    private static bool CheckFieldBoundary(NaplpsState state)
+    private static bool FieldWrapArmed(NaplpsState state)
     {
         // Don't check if field hasn't been explicitly set (default struct has zero dimensions)
-        if (state.Field.Dimensions.X == 0 && state.Field.Dimensions.Y == 0)
+        if (!state.Field.IsSet)
         {
             return false;
         }
 
         var pen = state.Pen;
-        float x1 = state.Field.Origin.X;
-        float x2 = state.Field.Origin.X + state.Field.Dimensions.X;
-        float y1 = state.Field.Origin.Y;
-        float y2 = state.Field.Origin.Y + state.Field.Dimensions.Y;
-        float fieldRight = Math.Max(x1, x2);
-        float fieldLeft = Math.Min(x1, x2);
-        float fieldBottom = Math.Min(y1, y2);
-        float fieldTop = Math.Max(y1, y2);
+        float fieldRight = state.Field.Right;
+        float fieldLeft = state.Field.Left;
+        float fieldBottom = state.Field.Bottom;
+        float fieldTop = state.Field.Top;
 
-        // If the effective field size is zero or negative in the text direction, skip the check.
-        // This handles cases where field dimensions are negative (extending off-screen).
-        float fieldWidth = fieldRight - fieldLeft;
-        float fieldHeight = fieldTop - fieldBottom;
+        // The wrap only operates when the character cell can lie within the field on the
+        // perpendicular axis: X3.110 6.2.7.14 repositions the wrapped row "such that the
+        // character field so defined lies entirely within the area or field", which is
+        // impossible in a field shorter than the cell. Device-verified on the Eaasy Sabre
+        // button labels (TQ000009): their fields are 9/256 tall against a 10/256 cell, and
+        // MVDI draws the labels straight through the far edge without wrapping - while a
+        // field exactly one cell tall wraps onto its own row (overprint).
+        bool cellFits = state.TextPath switch
+        {
+            TextPath.Right or TextPath.Left => state.Field.Height + EdgeEpsilon >= state.CharSize.Y,
+            TextPath.Up or TextPath.Down => state.Field.Width + EdgeEpsilon >= state.CharSize.X,
+            _ => true
+        };
 
-        // The field's line-wrap only governs text that is actually flowing within the field's
-        // rows/columns. When the pen has been explicitly moved outside the field's perpendicular
-        // extent (e.g. a fixed label drawn below the active field), the field boundary does not
-        // trigger an auto CR-LF. Gate on the perpendicular axis with one cell of tolerance.
+        if (!cellFits)
+        {
+            return false;
+        }
+
+        // The field's line-wrap governs text whose baseline row lies within the field's rows,
+        // strict at BOTH edges. Device-verified twice: FLDNEG (a baseline AT the top of a
+        // downward field, cell poking out above, does not arm the wrap) and the
+        // air-france-ad capture (its LOOK label sits a third of a cell BELOW its text
+        // field's bottom row and MVDI draws it straight through the far edge, while
+        // polaroid-ad's label at exactly the bottom row IS governed and wraps).
         bool inPerpBand;
         switch (state.TextPath)
         {
             case TextPath.Right:
             case TextPath.Left:
-                inPerpBand = pen.Y >= fieldBottom - state.CharSize.Y && pen.Y <= fieldTop + state.CharSize.Y;
+                inPerpBand = pen.Y >= fieldBottom && pen.Y < fieldTop;
                 break;
             case TextPath.Up:
             case TextPath.Down:
-                inPerpBand = pen.X >= fieldLeft - state.CharSize.X && pen.X <= fieldRight + state.CharSize.X;
+                inPerpBand = pen.X >= fieldLeft && pen.X < fieldRight;
                 break;
             default:
                 inPerpBand = true;
@@ -174,40 +225,188 @@ public class AsciiCharCommand : NaplpsCommand
             return false;
         }
 
+        // The field's wrap also only governs a run that BEGAN inside the field along the text
+        // path. A run positioned past the field's far edge - the "Return to EAASY SABRE Main
+        // Menu" label on TQ00030D starts right of its field and MVDI draws it on one line - is
+        // not flowing in the field and must not be broken by it. This cannot be folded into the
+        // post-advance test above: by the time a legitimate in-field run trips the threshold its
+        // own previous cursor position is already past the far edge too, so the decision has to
+        // be made from the run's origin.
+        var runOrigin = state.TextRunOrigin;
+
+        // Strict inequality: a run beginning exactly AT the far edge is outside the field's
+        // columns (its first cell already pokes past the edge). Device-verified on COLORBAR,
+        // whose labels start at the right edge of its leftward field and never field-wrap.
+        bool startedInField = state.TextPath switch
+        {
+            TextPath.Right => runOrigin.X < fieldRight,
+            TextPath.Left => runOrigin.X > fieldLeft,
+            TextPath.Down => runOrigin.Y > fieldBottom,
+            TextPath.Up => runOrigin.Y < fieldTop,
+            _ => true
+        };
+
+        return startedInField;
+    }
+
+    /// <summary>
+    /// Float-accumulation guard on the exact-edge test, NOT a behavioral tolerance: the device
+    /// makes this comparison in integer device coordinates, where a cell ending exactly on the
+    /// edge fits exactly. Our pen accumulates float advances, so "exactly on the edge" arrives
+    /// with noise around 1e-7 and would flip the comparison arbitrarily. The guard sits far
+    /// below one device pixel (1/640) and one encodable coordinate (2^-16), so it can never
+    /// absorb an authored overshoot.
+    /// </summary>
+    private const float EdgeEpsilon = 1e-4f;
+
+    /// <summary>
+    /// True when the character field about to be placed at the pen pokes past the active
+    /// field's far edge along the text path. Exact-edge test: device-verified on MVDI that a
+    /// cell ending exactly on the edge fits and the next one wraps. The cell extends one
+    /// CharSize.X right of and one CharSize.Y above the pen, so the far edge needs the cell
+    /// extent on the Right and Up paths and the pen alone on Left and Down.
+    /// </summary>
+    private static bool CellExceedsFarEdge(NaplpsState state)
+    {
+        var pen = state.Pen;
+        var field = state.Field;
+
+        return state.TextPath switch
+        {
+            TextPath.Right => field.Width > 0 && pen.X + state.CharSize.X > field.Right + EdgeEpsilon,
+            TextPath.Left => field.Width > 0 && pen.X < field.Left - EdgeEpsilon,
+            TextPath.Down => field.Height > 0 && pen.Y < field.Bottom - EdgeEpsilon,
+            TextPath.Up => field.Height > 0 && pen.Y + state.CharSize.Y > field.Top + EdgeEpsilon,
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// Legacy generic-NAPLPS boundary test, evaluated AFTER the pen advance - the historical
+    /// behavior, unchanged: a symmetric one-cell perpendicular band and a tolerance of three
+    /// character widths on the Right path matching the historical renderers'
+    /// integer-arithmetic boundary behavior, whose fixed-point pen accumulation differs from
+    /// our float math. Prodigy content uses the device-verified exact-edge check-before-draw
+    /// instead; its run-origin and strict-band gates are deliberately NOT applied here (they
+    /// break generic content such as icosamp, whose rows are continued by explicit APDs from
+    /// positions past the field's far edge and still wrap on the historical renderers).
+    /// </summary>
+    private static bool LegacyCheckFieldBoundary(NaplpsState state)
+    {
+        if (!state.Field.IsSet)
+        {
+            return false;
+        }
+
+        var pen = state.Pen;
+        var field = state.Field;
+
+        bool inPerpBand = state.TextPath switch
+        {
+            TextPath.Right or TextPath.Left =>
+                pen.Y >= field.Bottom - state.CharSize.Y && pen.Y <= field.Top + state.CharSize.Y,
+            TextPath.Up or TextPath.Down =>
+                pen.X >= field.Left - state.CharSize.X && pen.X <= field.Right + state.CharSize.X,
+            _ => true
+        };
+
+        if (!inPerpBand)
+        {
+            return false;
+        }
+
+        return state.TextPath switch
+        {
+            TextPath.Right => field.Width > 0 && pen.X > field.Right + state.CharSize.X * 3f,
+            TextPath.Left => field.Width > 0 && pen.X < field.Left,
+            TextPath.Down => field.Height > 0 && pen.Y < field.Bottom,
+            TextPath.Up => field.Height > 0 && pen.Y > field.Top,
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// Performs automatic carriage return + line feed. Moves the pen to the near edge of the
+    /// field along the character path and advances one interrow perpendicular to it. With
+    /// scroll off (the default), X3.110 6.2.7.14 makes the field a circular window: a row
+    /// that would leave the field's far perpendicular edge is instead repositioned "to the
+    /// opposite edge ... such that the character field so defined lies entirely within the
+    /// area or field". Device-verified on MVDI: the wrapped row lands with its cell top at
+    /// the field top, which for a one-row Prodigy field reduces to overprinting the same row.
+    /// </summary>
+    private static void PerformAutoWrap(NaplpsState state)
+    {
+        var pen = state.Pen;
+
+        float interrowMultiplier = state.TextInterrowSpacing switch
+        {
+            TextInterrowSpacing.One => 1.0f,
+            TextInterrowSpacing.FiveQuarters => 1.25f,
+            TextInterrowSpacing.ThreeHalves => 1.5f,
+            TextInterrowSpacing.Two => 2.0f,
+            _ => 1.0f
+        };
+
         switch (state.TextPath)
         {
             case TextPath.Right:
             {
-                // Tolerance of one full char width to match PP3's integer arithmetic boundary
-                // behavior. PP3's fixed-point pen accumulation differs from our float math,
-                // causing slight position drift that triggers wraps PP3 doesn't hit.
-                return fieldWidth > 0 && pen.X > fieldRight + state.CharSize.X * 3f;
+                pen.X = state.Field.Origin.X;
+                pen.Y -= state.CharSize.Y * interrowMultiplier;
+
+                if (state.Field.Height > 0 && pen.Y < state.Field.Bottom)
+                {
+                    pen.Y = state.Field.Top - state.CharSize.Y;
+                }
             }
+            break;
 
             case TextPath.Left:
             {
-                return fieldWidth > 0 && pen.X < fieldLeft;
+                pen.X = state.Field.Origin.X + state.Field.Dimensions.X;
+                pen.Y -= state.CharSize.Y * interrowMultiplier;
+
+                if (state.Field.Height > 0 && pen.Y < state.Field.Bottom)
+                {
+                    pen.Y = state.Field.Top - state.CharSize.Y;
+                }
             }
+            break;
 
             case TextPath.Down:
             {
-                return fieldHeight > 0 && pen.Y < fieldBottom;
+                pen.Y = state.Field.Top;
+                pen.X += state.CharSize.X * interrowMultiplier;
+
+                if (state.Field.Width > 0 && pen.X > state.Field.Right)
+                {
+                    pen.X = state.Field.Left + state.CharSize.X;
+                }
             }
+            break;
 
             case TextPath.Up:
             {
-                return fieldHeight > 0 && pen.Y > fieldTop;
+                pen.Y = state.Field.Bottom;
+                pen.X += state.CharSize.X * interrowMultiplier;
+
+                if (state.Field.Width > 0 && pen.X > state.Field.Right)
+                {
+                    pen.X = state.Field.Left + state.CharSize.X;
+                }
             }
+            break;
         }
 
-        return false;
+        state.Pen = pen;
     }
 
     /// <summary>
-    /// Performs automatic carriage return + line feed.
-    /// Moves pen to start of character path and advances perpendicular to it.
+    /// Legacy generic-NAPLPS automatic CR-LF, unchanged from the historical behavior: the pen
+    /// returns to the field origin along the character path and advances one interrow, with
+    /// no circular reposition (the circular window is device-verified on MVDI only).
     /// </summary>
-    private static void PerformAutoWrap(NaplpsState state)
+    private static void LegacyPerformAutoWrap(NaplpsState state)
     {
         var pen = state.Pen;
 

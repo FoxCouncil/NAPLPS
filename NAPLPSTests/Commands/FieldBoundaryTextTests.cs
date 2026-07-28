@@ -79,20 +79,23 @@ public class FieldBoundaryTextTests
     }
 
     /// <summary>
-    /// Verifies that IncrementalFieldCommand normalizes negative dimensions to positive.
-    /// A field with Dimensions.X = -1.0 should become Dimensions.X = 1.0.
-    /// This is the root cause fix — without it, the field boundary is inverted.
+    /// Field dimensions keep their sign - X3.110 5.3.3.6.2 places the origin in any of the
+    /// four corners via the dimension signs, so normalizing them flips the field onto the
+    /// wrong side of the origin (device-verified: MVDI keeps a negative-dy field BELOW its
+    /// origin). COLORBAR.NAP's field decodes with Dimensions.X = -1.0; the field extends left
+    /// of the origin, and its text renders horizontally because the runs begin at or beyond
+    /// the field's far edge, where the wrap does not arm (see WordWrapTests).
     /// </summary>
     [TestMethod]
-    public void NegativeFieldDimensionsAreNormalized()
+    public void NegativeFieldDimensionsKeepTheirDirection()
     {
         var nap = NaplpsFormat.FromFile("examples/COLORBAR.NAP");
+        var field = nap.State.Field;
 
-        // The IncrementalFieldCommand in COLORBAR.NAP sets up the text field.
-        // Its raw operand bytes decode X dimension as -1.0 (sign bit set, value bits zero).
-        // After normalization, Dimensions should be positive.
-        Assert.IsTrue(nap.State.Field.Dimensions.X > 0, $"Field Dimensions.X should be positive after normalization, got {nap.State.Field.Dimensions.X}");
-        Assert.IsTrue(nap.State.Field.Dimensions.Y > 0, $"Field Dimensions.Y should be positive, got {nap.State.Field.Dimensions.Y}");
+        Assert.IsTrue(field.Dimensions.X < 0, $"COLORBAR's raw X dimension is negative, got {field.Dimensions.X}");
+        Assert.AreEqual(field.Origin.X + field.Dimensions.X, field.Left, 1e-6f, "field must extend LEFT of its origin");
+        Assert.AreEqual(field.Origin.X, field.Right, 1e-6f, "the origin is the field's right edge");
+        Assert.IsTrue(field.Width > 0 && field.IsSet, "normalized accessors expose a positive extent");
     }
 
     /// <summary>
@@ -108,5 +111,51 @@ public class FieldBoundaryTextTests
 
         Assert.AreEqual(0f, nap.State.Field.Dimensions.X, "Default field should have zero X dimension");
         Assert.AreEqual(0f, nap.State.Field.Dimensions.Y, "Default field should have zero Y dimension");
+    }
+
+    /// <summary>
+    /// On Prodigy, FIELD leaves the cursor on the baseline of the field's first text row,
+    /// which is the field ORIGIN - not the field's top edge (X3.110 5.3.3.6.2). Measured
+    /// against MVDI on the Eaasy Sabre button labels (TQ000009): with the cursor at the top
+    /// edge our glyph ink landed exactly one field height above the device's, and CharSize.Y
+    /// as the offset does not fit that displacement. Generic NAPLPS keeps the historical
+    /// top-edge placement (icosamp is authored against it).
+    /// </summary>
+    [TestMethod]
+    public void FieldLeavesCursorAtItsOrigin()
+    {
+        // Two 3-byte 2D vertices: the field origin then its size.
+        var state = new NaplpsState { MultiByteValue = 3, SystemType = NaplpsSystemType.Prodigy };
+        var field = new IncrementalFieldCommand(state, 0xB8, new NaplpsOperands(
+        [
+            0xCA, 0xD4, 0xC0,
+            0xD2, 0xC6, 0xC0
+        ]));
+
+        // The two candidate cursor placements - origin, and origin plus the field height - only
+        // differ if the field has a height, so the assertion below needs one.
+        Assert.IsTrue(field.Dimensions.Y > 0.01f, $"test field needs a height, got {field.Dimensions.Y}");
+        Assert.IsTrue(field.Origin.Y > 0.01f, $"test field needs a non-zero origin, got {field.Origin.Y}");
+
+        Assert.AreEqual(field.Origin.X, state.Pen.X, 1e-6f, "cursor X must be the field origin");
+        Assert.AreEqual(field.Origin.Y, state.Pen.Y, 1e-6f, "cursor Y must be the field origin, not its top edge");
+    }
+
+    /// <summary>
+    /// The generic path keeps the historical placement: cursor at the field's top edge,
+    /// computed with absolute dimensions.
+    /// </summary>
+    [TestMethod]
+    public void FieldLeavesGenericCursorAtTopEdge()
+    {
+        var state = new NaplpsState { MultiByteValue = 3 };
+        var field = new IncrementalFieldCommand(state, 0xB8, new NaplpsOperands(
+        [
+            0xCA, 0xD4, 0xC0,
+            0xD2, 0xC6, 0xC0
+        ]));
+
+        Assert.AreEqual(field.Origin.X, state.Pen.X, 1e-6f, "cursor X must be the field origin");
+        Assert.AreEqual(field.Origin.Y + Math.Abs(field.Dimensions.Y), state.Pen.Y, 1e-6f, "cursor Y must be the field's top edge");
     }
 }
