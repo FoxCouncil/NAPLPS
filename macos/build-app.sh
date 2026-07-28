@@ -21,11 +21,19 @@ case "$(uname -m)" in
   *) echo "error: unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
 
-# Signing identity: honor $CODESIGN_ID; else use the local "NAPLPS Development" identity when it
-# exists; else fall back to ad-hoc with a warning. Ad-hoc is fine for running the app itself, but
-# the Quick Look host will NOT load ad-hoc extensions (see macos/README.md).
+# Signing identity: honor $CODESIGN_ID; in DEVID mode auto-detect a Developer ID Application
+# identity; else use the local "NAPLPS Development" identity when it exists; else fall back to
+# ad-hoc with a warning. Ad-hoc is fine for running the app itself, but the Quick Look host
+# will NOT load ad-hoc extensions (see macos/README.md).
+DEVID="${DEVID:-0}"
 if [ -n "${CODESIGN_ID:-}" ]; then
   SIGN_ID="$CODESIGN_ID"
+elif [ "$DEVID" = "1" ]; then
+  SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
+  if [ -z "$SIGN_ID" ]; then
+    echo "error: DEVID=1 but no 'Developer ID Application' identity in the keychain (or set CODESIGN_ID)" >&2
+    exit 1
+  fi
 elif security find-identity -v -p codesigning 2>/dev/null | grep -q "NAPLPS Development"; then
   SIGN_ID="NAPLPS Development"
 else
@@ -172,6 +180,37 @@ EOF
   codesign --force --options runtime --sign "$SIGN_ID" "$APP/Contents/PlugIns/NAPLPSPreview.appex/Contents/Frameworks/libNAPLPS.dylib" 2>&1 | tail -1
   codesign --force --options runtime --sign "$SIGN_ID" --entitlements "$ENT/preview.entitlements" "$APP/Contents/PlugIns/NAPLPSPreview.appex" 2>&1 | tail -1
   codesign --force --sign "$SIGN_ID" --entitlements "$ENT/app.entitlements" "$APP" 2>&1 | tail -1
+  rm -rf "$ENT"
+elif [ "$DEVID" = "1" ]; then
+  # -- Developer ID (notarized direct-distribution) signing --
+  # Notarization requires the hardened runtime and a secure timestamp on every Mach-O. The
+  # CoreCLR payload JITs under the hardened runtime only with the relaxations Microsoft
+  # documents for notarizing .NET apps; no App Sandbox outside the store, and no profiles.
+  ENT="$(mktemp -d)"
+  cat > "$ENT/app.entitlements" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
+</dict></plist>
+EOF
+  cat > "$ENT/appex.entitlements" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.app-sandbox</key><true/>
+  <key>com.apple.security.files.user-selected.read-only</key><true/>
+</dict></plist>
+EOF
+  codesign --force --deep --options runtime --timestamp --sign "$SIGN_ID" "$APP" 2>&1 | tail -1
+  for EXT in "$APP/Contents/PlugIns/NAPLPSQuickLook.appex" "$APP/Contents/PlugIns/NAPLPSPreview.appex"; do
+    codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$EXT/Contents/Frameworks/libNAPLPS.dylib" 2>&1 | tail -1
+    codesign --force --options runtime --timestamp --sign "$SIGN_ID" --entitlements "$ENT/appex.entitlements" "$EXT" 2>&1 | tail -1
+  done
+  codesign --force --options runtime --timestamp --sign "$SIGN_ID" --entitlements "$ENT/app.entitlements" "$APP" 2>&1 | tail -1
   rm -rf "$ENT"
 else
   # -- Development / ad-hoc signing --
