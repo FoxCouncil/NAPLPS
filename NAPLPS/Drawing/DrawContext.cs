@@ -657,6 +657,72 @@ public class DrawContext : IDisposable
         pngMeta.RepeatCount = loop ? (uint)0 : 1;
 
         var baseDelay = new Rational((uint)delayHundredths, 1000);
+
+        bool firstFrame = true;
+
+        RenderFrameSequence(delayHundredths, (frame, multiplier) =>
+        {
+            AddApngFrame(apng, frame, baseDelay, multiplier, firstFrame);
+            firstFrame = false;
+        });
+
+        // Append blink animation frames if requested and blink processes exist
+        if (blinkCycles > 0 && NAPLPS.State.BlinkProcesses.Count > 0)
+        {
+            AppendBlinkFrames(apng, blinkCycles);
+        }
+
+        Drawable.LivePalette = null;
+
+        return apng;
+    }
+
+    /// <summary>
+    /// Renders straight to an APNG file, holding only the current and previous canvas rather than
+    /// every frame. See <see cref="ApngWriter"/> for why that matters - the in-memory path is
+    /// O(frames) and the corpus contains files that need gigabytes on their own.
+    /// Blink frames are not supported here; use <see cref="RenderToApng"/> for those.
+    /// </summary>
+    /// <returns>The number of frames written.</returns>
+    public int RenderApngToFile(string path, int delayHundredths = 5, bool loop = false)
+    {
+        using var file = System.IO.File.Create(path);
+        using var writer = new ApngWriter(file, Size.Width, Size.Height, loop ? 0u : 1u);
+
+        var canvas = new byte[Size.Width * Size.Height * 4];
+        var previous = new byte[Size.Width * Size.Height * 4];
+        bool first = true;
+        int frames = 0;
+
+        RenderFrameSequence(delayHundredths, (frame, multiplier) =>
+        {
+            frame.CopyPixelDataTo(canvas);
+
+            // The first frame becomes the PNG's own image and must cover the whole canvas.
+            var rect = first
+                ? new Rectangle(0, 0, Size.Width, Size.Height)
+                : ApngWriter.DirtyRect(canvas, previous, Size.Width, Size.Height);
+
+            writer.WriteFrame(canvas, rect, (ushort)(delayHundredths * multiplier), 1000);
+
+            canvas.CopyTo(previous.AsSpan());
+            first = false;
+            frames++;
+        });
+
+        Drawable.LivePalette = null;
+
+        return frames;
+    }
+
+    /// <summary>
+    /// Walks the command stream and hands each completed frame to <paramref name="emitFrame"/> with
+    /// the number of base delays it should be held for. The frame is disposed once emitted, so a
+    /// consumer that needs to keep it must copy. Shared by the in-memory and streaming APNG paths
+    /// so the CLUT re-render and identical-frame coalescing cannot drift between them.
+    /// </summary>
+    private void RenderFrameSequence(int delayHundredths, Action<Image<Rgba32>, int> emitFrame)
+    {
         Image<Rgba32>? previousFrame = null;
         int currentFrameDelayMultiplier = 1;
 
@@ -703,7 +769,7 @@ public class DrawContext : IDisposable
                 // Commit the previous frame, then capture current state with wait delay
                 if (previousFrame != null)
                 {
-                    AddApngFrame(apng, previousFrame, baseDelay, currentFrameDelayMultiplier);
+                    emitFrame(previousFrame, currentFrameDelayMultiplier);
                     previousFrame.Dispose();
                 }
 
@@ -723,7 +789,7 @@ public class DrawContext : IDisposable
                 {
                     if (previousFrame != null)
                     {
-                        AddApngFrame(apng, previousFrame, baseDelay, currentFrameDelayMultiplier);
+                        emitFrame(previousFrame, currentFrameDelayMultiplier);
                         previousFrame.Dispose();
                     }
 
@@ -742,19 +808,9 @@ public class DrawContext : IDisposable
 
         if (previousFrame != null)
         {
-            AddApngFrame(apng, previousFrame, baseDelay, currentFrameDelayMultiplier);
+            emitFrame(previousFrame, currentFrameDelayMultiplier);
             previousFrame.Dispose();
         }
-
-        // Append blink animation frames if requested and blink processes exist
-        if (blinkCycles > 0 && NAPLPS.State.BlinkProcesses.Count > 0)
-        {
-            AppendBlinkFrames(apng, blinkCycles);
-        }
-
-        Drawable.LivePalette = null;
-
-        return apng;
     }
 
     /// <summary>
@@ -807,7 +863,7 @@ public class DrawContext : IDisposable
                 {
                     if (lastBlinkFrame != null)
                     {
-                        AddApngFrame(apng, lastBlinkFrame, blinkDelay, frameAccumulator);
+                        AddApngFrame(apng, lastBlinkFrame, blinkDelay, frameAccumulator, replaceRoot: false);
                         lastBlinkFrame.Dispose();
                     }
 
@@ -823,7 +879,7 @@ public class DrawContext : IDisposable
 
         if (lastBlinkFrame != null)
         {
-            AddApngFrame(apng, lastBlinkFrame, blinkDelay, frameAccumulator);
+            AddApngFrame(apng, lastBlinkFrame, blinkDelay, frameAccumulator, replaceRoot: false);
             lastBlinkFrame.Dispose();
         }
 
@@ -831,11 +887,21 @@ public class DrawContext : IDisposable
         BlinkAnimator.Reset();
     }
 
-    private static void AddApngFrame(Image<Rgba32> apng, Image<Rgba32> frame, Rational baseDelay, int delayMultiplier)
+    /// <summary>
+    /// Appends a frame. <paramref name="replaceRoot"/> overwrites the placeholder frame that
+    /// <c>new Image&lt;Rgba32&gt;</c> creates, instead of adding alongside it, and must be true for
+    /// exactly the first frame written.
+    ///
+    /// This used to be decided by inspecting whether the root looked empty, which was wrong twice
+    /// over: the placeholder is transparent black so it never matched, leaving a wasted blank frame
+    /// at the front of every APNG; and once it did match, any run of blank frames collapsed into
+    /// one because the test kept passing after the root had been filled in.
+    /// </summary>
+    private static void AddApngFrame(Image<Rgba32> apng, Image<Rgba32> frame, Rational baseDelay, int delayMultiplier, bool replaceRoot)
     {
         var frameDelay = new Rational(baseDelay.Numerator * (uint)delayMultiplier, baseDelay.Denominator);
 
-        if (apng.Frames.Count == 1 && IsBlankFrame(apng.Frames.RootFrame))
+        if (replaceRoot)
         {
             apng.Frames.RootFrame.ProcessPixelRows(frame.Frames.RootFrame, (dst, src) =>
             {
@@ -854,29 +920,6 @@ public class DrawContext : IDisposable
         }
     }
 
-    private static bool IsBlankFrame(ImageFrame<Rgba32> frame)
-    {
-        bool allBlack = true;
-
-        frame.ProcessPixelRows(accessor =>
-        {
-            for (int y = 0; y < accessor.Height && allBlack; y++)
-            {
-                var row = accessor.GetRowSpan(y);
-
-                for (int x = 0; x < row.Length; x++)
-                {
-                    if (row[x].R != 0 || row[x].G != 0 || row[x].B != 0 || row[x].A != 255)
-                    {
-                        allBlack = false;
-                        break;
-                    }
-                }
-            }
-        });
-
-        return allBlack;
-    }
 
     private static bool FramesAreIdentical(Image<Rgba32> a, Image<Rgba32> b)
     {

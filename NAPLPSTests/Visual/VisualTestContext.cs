@@ -150,30 +150,77 @@ public static class VisualTestContext
         return drawContext.RenderToApng();
     }
 
+    /// <summary>
+    /// Renders straight to <paramref name="outputPath"/> and returns the frame count. The suite runs
+    /// several files at once and the longest animations are thousands of full-canvas frames, so
+    /// holding a whole APNG in memory is what set the parallelism ceiling. Streaming makes a file's
+    /// cost independent of its frame count.
+    /// </summary>
+    public static int RenderApngToFile(string exampleFilePath, string outputPath, NaplpsSystemType? forcedSystemType = null)
+    {
+        var naplps = NaplpsFormat.FromFile(exampleFilePath, forcedSystemType);
+
+        using var drawContext = new DrawContext(naplps, new SixLabors.ImageSharp.Size(CanvasWidth, CanvasHeight));
+
+        return drawContext.RenderApngToFile(outputPath);
+    }
+
+    /// <summary>
+    /// Compares two APNGs frame by frame without ever holding more than one canvas from each.
+    /// <see cref="Image.Load{TPixel}(string)"/> materialises every frame at full canvas size, which
+    /// for the longest corpus files is gigabytes per side and was what set the suite's parallelism
+    /// ceiling; <see cref="ApngReader"/> composites on the fly instead.
+    /// </summary>
     public static ComparisonResult CompareApngs(string baselinePath, string actualPath)
     {
-        using var baseline = Image.Load<Rgba32>(baselinePath);
-        using var actual = Image.Load<Rgba32>(actualPath);
+        using var baselineStream = System.IO.File.OpenRead(baselinePath);
+        using var actualStream = System.IO.File.OpenRead(actualPath);
+        using var baselineReader = new ApngReader(baselineStream, leaveOpen: true);
+        using var actualReader = new ApngReader(actualStream, leaveOpen: true);
 
-        var baselineCount = baseline.Frames.Count;
-        var actualCount = actual.Frames.Count;
-        var maxFrames = Math.Max(baselineCount, actualCount);
+        var baselinePixels = new byte[CanvasWidth * CanvasHeight * 4];
+        var actualPixels = new byte[CanvasWidth * CanvasHeight * 4];
+
         var frameDiffs = new List<FrameDiffResult>();
         long totalDiffPixels = 0;
-        bool allIdentical = baselineCount == actualCount;
+        bool allIdentical = true;
+        int baselineCount = 0;
+        int actualCount = 0;
+        int index = 0;
 
-        for (int i = 0; i < maxFrames; i++)
+        while (true)
         {
-            if (i >= baselineCount || i >= actualCount)
+            bool haveBaseline = baselineReader.TryReadFrame(baselinePixels);
+            bool haveActual = actualReader.TryReadFrame(actualPixels);
+
+            if (!haveBaseline && !haveActual)
             {
-                var missingFramePixels = (long)CanvasWidth * CanvasHeight;
+                break;
+            }
+
+            if (haveBaseline)
+            {
+                baselineCount++;
+            }
+
+            if (haveActual)
+            {
+                actualCount++;
+            }
+
+            // One side ran out: count the whole canvas as different and keep draining the other so
+            // the reported frame counts stay accurate.
+            if (!haveBaseline || !haveActual)
+            {
+                long missingFramePixels = (long)CanvasWidth * CanvasHeight;
                 totalDiffPixels += missingFramePixels;
-                frameDiffs.Add(new FrameDiffResult(i, missingFramePixels, missingFramePixels, null));
+                frameDiffs.Add(new FrameDiffResult(index, missingFramePixels, missingFramePixels, null));
                 allIdentical = false;
+                index++;
                 continue;
             }
 
-            var diff = CompareFrames(baseline.Frames[i], actual.Frames[i]);
+            var diff = CompareFrames(index, baselinePixels, actualPixels);
             frameDiffs.Add(diff);
             totalDiffPixels += diff.DiffPixelCount;
 
@@ -181,50 +228,69 @@ public static class VisualTestContext
             {
                 allIdentical = false;
             }
+
+            index++;
         }
 
         return new ComparisonResult(allIdentical, baselineCount, actualCount, frameDiffs, totalDiffPixels);
     }
 
-    private static FrameDiffResult CompareFrames(ImageFrame<Rgba32> baselineFrame, ImageFrame<Rgba32> actualFrame)
+    private static FrameDiffResult CompareFrames(int index, byte[] baseline, byte[] actual)
     {
-        int width = baselineFrame.Width;
-        int height = baselineFrame.Height;
-        long diffCount = 0;
-        long totalPixels = (long)width * height;
+        long totalPixels = (long)CanvasWidth * CanvasHeight;
 
-        var diffImage = new Image<Rgba32>(width, height);
-
-        baselineFrame.ProcessPixelRows(actualFrame, diffImage.Frames.RootFrame, (bAccessor, aAccessor, dAccessor) =>
+        // Most frames match, and building a diff image for those was pure waste - the old code
+        // allocated one per frame and dropped it on the floor unreferenced when nothing differed.
+        if (baseline.AsSpan().SequenceEqual(actual))
         {
-            for (int y = 0; y < height; y++)
-            {
-                var bRow = bAccessor.GetRowSpan(y);
-                var aRow = aAccessor.GetRowSpan(y);
-                var dRow = dAccessor.GetRowSpan(y);
+            return new FrameDiffResult(index, 0, totalPixels, null);
+        }
 
-                for (int x = 0; x < width; x++)
+        long diffCount = 0;
+        var diffImage = new Image<Rgba32>(CanvasWidth, CanvasHeight);
+
+        diffImage.Frames.RootFrame.ProcessPixelRows(accessor =>
+        {
+            for (int y = 0; y < CanvasHeight; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                int offset = y * CanvasWidth * 4;
+
+                for (int x = 0; x < CanvasWidth; x++)
                 {
-                    if (bRow[x] != aRow[x])
+                    int i = offset + (x * 4);
+
+                    if (!baseline.AsSpan(i, 4).SequenceEqual(actual.AsSpan(i, 4)))
                     {
-                        Interlocked.Increment(ref diffCount);
-                        dRow[x] = new Rgba32(255, 0, 255, 255);
+                        diffCount++;
+                        row[x] = new Rgba32(255, 0, 255, 255);
                     }
                     else
                     {
-                        var p = bRow[x];
-                        dRow[x] = new Rgba32((byte)(p.R / 4), (byte)(p.G / 4), (byte)(p.B / 4), 255);
+                        row[x] = new Rgba32((byte)(baseline[i] / 4), (byte)(baseline[i + 1] / 4), (byte)(baseline[i + 2] / 4), 255);
                     }
                 }
             }
         });
 
-        return new FrameDiffResult(0, diffCount, totalPixels, diffCount > 0 ? diffImage : null);
+        return new FrameDiffResult(index, diffCount, totalPixels, diffImage);
     }
 
     public static void GenerateDiffHtml(string relativePath, ComparisonResult comparison, string baselinePath, string actualPath, string outputPath)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+
+        // A file that matched has nothing to step through, and building the frame-by-frame viewer
+        // for it was most of the suite's cost: two full Image.Load calls plus a base64 PNG per
+        // frame, for every file in the corpus. That produced 3.4 GB of Diffs/ - a single 267 MB
+        // HTML page for a test that PASSED, which no browser will open anyway. Browsers animate
+        // APNG natively, so a passing file just needs the two files side by side.
+        if (comparison.AreIdentical)
+        {
+            GeneratePassHtml(relativePath, comparison, baselinePath, actualPath, outputPath);
+
+            return;
+        }
 
         var sb = new StringBuilder();
         sb.AppendLine("<!DOCTYPE html>");
@@ -465,23 +531,54 @@ public static class VisualTestContext
         return Path.GetDirectoryName(Path.GetDirectoryName(callerPath!))!;
     }
 
+    /// <summary>
+    /// Lightweight page for a file that matched its baseline: the two APNGs referenced by path and
+    /// left to the browser to animate. No frame extraction, no base64.
+    /// </summary>
+    private static void GeneratePassHtml(string relativePath, ComparisonResult comparison, string baselinePath, string actualPath, string outputPath)
+    {
+        var dir = Path.GetDirectoryName(outputPath)!;
+        var reportRelative = Path.GetRelativePath(dir, ReportPath).Replace('\\', '/');
+        var baselineRelative = Path.GetRelativePath(dir, baselinePath).Replace('\\', '/');
+        var actualRelative = Path.GetRelativePath(dir, actualPath).Replace('\\', '/');
+
+        var sb = new StringBuilder();
+        sb.AppendLine("<!DOCTYPE html>");
+        sb.AppendLine("<html><head><meta charset='utf-8'>");
+        sb.AppendLine($"<title>Match: {HtmlEncode(relativePath)}</title>");
+        sb.AppendLine("<style>");
+        sb.AppendLine(DiffPageCss());
+        sb.AppendLine("</style></head><body>");
+        sb.AppendLine($"<div class='breadcrumb'><a href='{HtmlEncode(reportRelative)}'>&larr; Back to Report</a></div>");
+        sb.AppendLine($"<h1>Visual Match: {HtmlEncode(relativePath)}</h1>");
+        sb.AppendLine($"<div class='summary'>Identical &mdash; {comparison.BaselineFrameCount} frames, no differing pixels</div>");
+        sb.AppendLine($"<div class='timestamp'>Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}</div>");
+        sb.AppendLine("<div class='viewer'>");
+        sb.AppendLine($"<div><h3>Baseline</h3><img src='{HtmlEncode(baselineRelative)}' alt='baseline'></div>");
+        sb.AppendLine($"<div><h3>Actual</h3><img src='{HtmlEncode(actualRelative)}' alt='actual'></div>");
+        sb.AppendLine("</div>");
+        sb.AppendLine("</body></html>");
+
+        System.IO.File.WriteAllText(outputPath, sb.ToString());
+    }
+
+    /// <summary>
+    /// Streams frames out of an APNG as base64 PNGs. Uses <see cref="ApngReader"/> rather than
+    /// <see cref="Image.Load{TPixel}(string)"/> so only one canvas is live at a time; loading the
+    /// whole animation costs gigabytes on the longer corpus files.
+    /// </summary>
     private static List<string> ExtractFramesAsBase64(string apngPath)
     {
         var frames = new List<string>();
 
-        using var image = Image.Load<Rgba32>(apngPath);
+        using var stream = System.IO.File.OpenRead(apngPath);
+        using var reader = new ApngReader(stream, leaveOpen: true);
 
-        for (int i = 0; i < image.Frames.Count; i++)
+        var pixels = new byte[reader.Width * reader.Height * 4];
+
+        while (reader.TryReadFrame(pixels))
         {
-            using var singleFrame = new Image<Rgba32>(image.Width, image.Height);
-
-            singleFrame.Frames.RootFrame.ProcessPixelRows(image.Frames[i], (dst, src) =>
-            {
-                for (int y = 0; y < dst.Height; y++)
-                {
-                    src.GetRowSpan(y).CopyTo(dst.GetRowSpan(y));
-                }
-            });
+            using var singleFrame = Image.LoadPixelData<Rgba32>(pixels, reader.Width, reader.Height);
 
             frames.Add(ImageToBase64(singleFrame));
         }

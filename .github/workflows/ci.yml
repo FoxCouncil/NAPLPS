@@ -65,17 +65,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Parallelism is set per runner from a measured peak, not a guess: rendering the corpus
-        # 3-at-a-time peaks at ~19.8 GB RSS, because a single file can be thousands of frames held
-        # in memory at once (farao.nap is 1462 frames, ~4.6 GB by itself). Windows and macOS page
-        # under that and survive; the Linux runners have no swap, so it is an instant kill.
+        # These used to be per-runner memory limits: the suite held whole animations in memory and
+        # peaked at ~19.8 GB, which the swapless Linux runners could not survive at all. Rendering,
+        # comparison and reporting now stream, and the measured peak is ~0.34 GB independent of
+        # frame count, so every runner can use its cores. Left explicit rather than unset so a
+        # future regression in the streaming path shows up as a CI OOM on a known number.
         include:
           - os: ubuntu-latest
-            parallelism: 1
+            parallelism: 4
           - os: windows-latest
-            parallelism: 3
+            parallelism: 4
           - os: macos-15
-            parallelism: 3
+            parallelism: 4
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,8 +94,9 @@ jobs:
         run: dotnet test --configuration Release --no-build --nologo --filter "TestCategory=VR"
 
       # Summary report plus the raw renders, so a failure can be diffed locally against the
-      # committed baselines. Deliberately NOT the Diffs folder: those HTML pages inline every
-      # frame as base64, which for the multi-thousand-frame files runs to gigabytes.
+      # committed baselines. Still not the Diffs folder: pages for MATCHING files are now tiny
+      # (they just reference the APNGs), but a failing file's page inlines every frame as base64
+      # and a multi-thousand-frame failure would still run to hundreds of megabytes.
       - name: Upload diff report
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

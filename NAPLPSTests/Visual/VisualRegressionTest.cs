@@ -38,11 +38,12 @@ public class VisualRegressionTest
     }
 
     /// <summary>
-    /// How many files to render at once. This cap is about MEMORY, not CPU: a single render holds
-    /// the whole animation in memory as an APNG, and the corpus contains multi-hundred-frame files
-    /// — a 370-frame 1024x768 render is roughly 1.1 GB live. Unbounded, this has exhausted RAM on an
-    /// 8 GB machine and taken the whole box down, so the default stays deliberately conservative.
-    /// Raise it with NAPLPS_VR_PARALLELISM on a machine you know has the headroom.
+    /// How many files to render at once. This used to be a hard MEMORY cap - rendering held the
+    /// whole animation in memory, so a single multi-thousand-frame file cost gigabytes and the
+    /// suite peaked at ~19.8 GB, which had already taken a machine down once. Rendering, comparing
+    /// and reporting now all stream (see ApngWriter/ApngReader), and the measured peak is ~0.34 GB
+    /// regardless of how many frames a file has, so this is an ordinary CPU-bound cap again.
+    /// Override with NAPLPS_VR_PARALLELISM.
     /// </summary>
     private static int RenderParallelism()
     {
@@ -51,7 +52,7 @@ public class VisualRegressionTest
             return configured;
         }
 
-        return Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
+        return Math.Max(1, Environment.ProcessorCount);
     }
 
     private static void ProcessFile(string relativePath, System.Collections.Concurrent.ConcurrentBag<string> failures)
@@ -60,11 +61,12 @@ public class VisualRegressionTest
         var baselinePath = VisualTestContext.GetBaselinePath(relativePath);
         var actualPath = VisualTestContext.GetActualPath(relativePath);
 
-        Image<Rgba32>? apng = null;
+        int frameCount;
 
         try
         {
-            apng = VisualTestContext.RenderApng(fullPath, VisualTestContext.GetForcedSystemType(relativePath));
+            Directory.CreateDirectory(Path.GetDirectoryName(actualPath)!);
+            frameCount = VisualTestContext.RenderApngToFile(fullPath, actualPath, VisualTestContext.GetForcedSystemType(relativePath));
         }
         catch (Exception ex)
         {
@@ -74,11 +76,6 @@ public class VisualRegressionTest
 
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(actualPath)!);
-            apng.SaveAsPng(actualPath);
-            var frameCount = apng.Frames.Count;
-            apng.Dispose();
-
             var diffHtmlPath = VisualTestContext.GetDiffHtmlPath(relativePath);
 
             if (!System.IO.File.Exists(baselinePath))
