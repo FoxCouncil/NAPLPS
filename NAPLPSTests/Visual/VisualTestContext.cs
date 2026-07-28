@@ -31,11 +31,19 @@ public record VisualTestResult(
     string? ErrorMessage
 );
 
+/// <summary>
+/// A single frame's comparison outcome. Deliberately holds no image: differing frames are written
+/// straight to disk as they are compared, because keeping them meant a live <see cref="Image{TPixel}"/>
+/// per differing frame and a corpus-wide regression would hold thousands at once.
+/// <paramref name="DiffBounds"/> is the bounding box of the changed pixels, which is what tells you
+/// at a glance whether a regression is "one glyph moved" or "the whole canvas".
+/// </summary>
 public record FrameDiffResult(
     int FrameIndex,
     long DiffPixelCount,
     long TotalPixels,
-    Image<Rgba32>? DiffImage
+    SixLabors.ImageSharp.Rectangle? DiffBounds,
+    bool Exported
 );
 
 public record ComparisonResult(
@@ -43,7 +51,10 @@ public record ComparisonResult(
     int BaselineFrameCount,
     int ActualFrameCount,
     List<FrameDiffResult> FrameDiffs,
-    long TotalDiffPixels
+    long TotalDiffPixels,
+    int ExportedFrames = 0,
+    int SuppressedFrames = 0,
+    int UnpairedFrames = 0
 );
 
 public static class VisualTestContext
@@ -141,15 +152,6 @@ public static class VisualTestContext
         return ForcedProdigyDirs.Contains(topDir) ? NaplpsSystemType.Prodigy : null;
     }
 
-    public static Image<Rgba32> RenderApng(string exampleFilePath, NaplpsSystemType? forcedSystemType = null)
-    {
-        var naplps = NaplpsFormat.FromFile(exampleFilePath, forcedSystemType);
-
-        using var drawContext = new DrawContext(naplps, new SixLabors.ImageSharp.Size(CanvasWidth, CanvasHeight));
-
-        return drawContext.RenderToApng();
-    }
-
     /// <summary>
     /// Renders straight to <paramref name="outputPath"/> and returns the frame count. The suite runs
     /// several files at once and the longest animations are thousands of full-canvas frames, so
@@ -166,12 +168,23 @@ public static class VisualTestContext
     }
 
     /// <summary>
+    /// Upper bound on how many differing frames get written out for the viewer. A corpus-wide
+    /// regression can make thousands of frames differ across hundreds of files; past this point the
+    /// extra PNGs tell you nothing new. Anything skipped is reported, never silently dropped.
+    /// </summary>
+    public const int MaxExportedFramesPerFile = 400;
+
+    /// <summary>
     /// Compares two APNGs frame by frame without ever holding more than one canvas from each.
     /// <see cref="Image.Load{TPixel}(string)"/> materialises every frame at full canvas size, which
     /// for the longest corpus files is gigabytes per side and was what set the suite's parallelism
     /// ceiling; <see cref="ApngReader"/> composites on the fly instead.
     /// </summary>
-    public static ComparisonResult CompareApngs(string baselinePath, string actualPath)
+    /// <param name="frameExportDir">
+    /// When set, each differing frame is written here as a baseline/actual/diff PNG triplet for the
+    /// viewer to load on demand.
+    /// </param>
+    public static ComparisonResult CompareApngs(string baselinePath, string actualPath, string? frameExportDir = null)
     {
         using var baselineStream = System.IO.File.OpenRead(baselinePath);
         using var actualStream = System.IO.File.OpenRead(actualPath);
@@ -187,6 +200,9 @@ public static class VisualTestContext
         int baselineCount = 0;
         int actualCount = 0;
         int index = 0;
+        int exported = 0;
+        int suppressed = 0;
+        int unpaired = 0;
 
         while (true)
         {
@@ -209,47 +225,80 @@ public static class VisualTestContext
             }
 
             // One side ran out: count the whole canvas as different and keep draining the other so
-            // the reported frame counts stay accurate.
+            // the reported frame counts stay accurate. These frames have no counterpart to sit
+            // beside, so they are not exported - counted separately so the page can say so rather
+            // than leave them unaccounted for.
             if (!haveBaseline || !haveActual)
             {
                 long missingFramePixels = (long)CanvasWidth * CanvasHeight;
                 totalDiffPixels += missingFramePixels;
-                frameDiffs.Add(new FrameDiffResult(index, missingFramePixels, missingFramePixels, null));
+                frameDiffs.Add(new FrameDiffResult(index, missingFramePixels, missingFramePixels, null, false));
                 allIdentical = false;
+                unpaired++;
                 index++;
                 continue;
             }
 
             var diff = CompareFrames(index, baselinePixels, actualPixels);
-            frameDiffs.Add(diff);
             totalDiffPixels += diff.DiffPixelCount;
 
             if (diff.DiffPixelCount > 0)
             {
                 allIdentical = false;
+
+                if (frameExportDir is not null)
+                {
+                    if (exported < MaxExportedFramesPerFile)
+                    {
+                        ExportFrameTriplet(frameExportDir, index, baselinePixels, actualPixels, diff.DiffBounds);
+                        diff = diff with { Exported = true };
+                        exported++;
+                    }
+                    else
+                    {
+                        suppressed++;
+                    }
+                }
             }
 
+            frameDiffs.Add(diff);
             index++;
         }
 
-        return new ComparisonResult(allIdentical, baselineCount, actualCount, frameDiffs, totalDiffPixels);
+        return new ComparisonResult(allIdentical, baselineCount, actualCount, frameDiffs, totalDiffPixels, exported, suppressed, unpaired);
     }
 
-    private static FrameDiffResult CompareFrames(int index, byte[] baseline, byte[] actual)
+    /// <summary>
+    /// Writes the baseline, actual and diff images for one differing frame as PNGs the viewer can
+    /// load on demand. Inlining these as base64 instead is what produced 267 MB HTML pages.
+    /// </summary>
+    private static void ExportFrameTriplet(string dir, int index, byte[] baseline, byte[] actual, SixLabors.ImageSharp.Rectangle? bounds)
     {
-        long totalPixels = (long)CanvasWidth * CanvasHeight;
+        Directory.CreateDirectory(dir);
 
-        // Most frames match, and building a diff image for those was pure waste - the old code
-        // allocated one per frame and dropped it on the floor unreferenced when nothing differed.
-        if (baseline.AsSpan().SequenceEqual(actual))
+        using (var image = Image.LoadPixelData<Rgba32>(baseline, CanvasWidth, CanvasHeight))
         {
-            return new FrameDiffResult(index, 0, totalPixels, null);
+            image.SaveAsPng(Path.Combine(dir, $"b{index:D6}.png"));
         }
 
-        long diffCount = 0;
-        var diffImage = new Image<Rgba32>(CanvasWidth, CanvasHeight);
+        using (var image = Image.LoadPixelData<Rgba32>(actual, CanvasWidth, CanvasHeight))
+        {
+            image.SaveAsPng(Path.Combine(dir, $"a{index:D6}.png"));
+        }
 
-        diffImage.Frames.RootFrame.ProcessPixelRows(accessor =>
+        using var diff = BuildDiffImage(baseline, actual, bounds);
+        diff.SaveAsPng(Path.Combine(dir, $"d{index:D6}.png"));
+    }
+
+    /// <summary>
+    /// Differing pixels in magenta over a dimmed copy of the baseline, with the change's bounding
+    /// box outlined so a single-pixel difference is still findable on a 1024x768 canvas.
+    /// </summary>
+    private static Image<Rgba32> BuildDiffImage(byte[] baseline, byte[] actual, SixLabors.ImageSharp.Rectangle? bounds)
+    {
+        var image = new Image<Rgba32>(CanvasWidth, CanvasHeight);
+
+        image.Frames.RootFrame.ProcessPixelRows(accessor =>
         {
             for (int y = 0; y < CanvasHeight; y++)
             {
@@ -262,7 +311,6 @@ public static class VisualTestContext
 
                     if (!baseline.AsSpan(i, 4).SequenceEqual(actual.AsSpan(i, 4)))
                     {
-                        diffCount++;
                         row[x] = new Rgba32(255, 0, 255, 255);
                     }
                     else
@@ -271,9 +319,87 @@ public static class VisualTestContext
                     }
                 }
             }
+
+            if (bounds is not { } box)
+            {
+                return;
+            }
+
+            var outline = new Rgba32(0, 255, 128, 255);
+
+            // Rectangle.Right/Bottom are exclusive, so step back one for the drawn edge.
+            int left = box.Left;
+            int right = box.Right - 1;
+            int top = box.Top;
+            int bottom = box.Bottom - 1;
+
+            for (int x = left; x <= right; x++)
+            {
+                accessor.GetRowSpan(top)[x] = outline;
+                accessor.GetRowSpan(bottom)[x] = outline;
+            }
+
+            for (int y = top; y <= bottom; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                row[left] = outline;
+                row[right] = outline;
+            }
         });
 
-        return new FrameDiffResult(index, diffCount, totalPixels, diffImage);
+        return image;
+    }
+
+    private static FrameDiffResult CompareFrames(int index, byte[] baseline, byte[] actual)
+    {
+        long totalPixels = (long)CanvasWidth * CanvasHeight;
+
+        // Most frames match, and the whole-buffer compare settles that in one pass. The old code
+        // built an Image per frame regardless and dropped it unreferenced when nothing differed.
+        if (baseline.AsSpan().SequenceEqual(actual))
+        {
+            return new FrameDiffResult(index, 0, totalPixels, null, false);
+        }
+
+        long diffCount = 0;
+        int minX = CanvasWidth;
+        int minY = CanvasHeight;
+        int maxX = -1;
+        int maxY = -1;
+
+        for (int y = 0; y < CanvasHeight; y++)
+        {
+            int offset = y * CanvasWidth * 4;
+
+            // Skip whole rows that match rather than testing pixel by pixel; on a typical
+            // regression the change touches a handful of scanlines.
+            if (baseline.AsSpan(offset, CanvasWidth * 4).SequenceEqual(actual.AsSpan(offset, CanvasWidth * 4)))
+            {
+                continue;
+            }
+
+            if (y < minY) { minY = y; }
+            if (y > maxY) { maxY = y; }
+
+            for (int x = 0; x < CanvasWidth; x++)
+            {
+                int i = offset + (x * 4);
+
+                if (baseline.AsSpan(i, 4).SequenceEqual(actual.AsSpan(i, 4)))
+                {
+                    continue;
+                }
+
+                diffCount++;
+
+                if (x < minX) { minX = x; }
+                if (x > maxX) { maxX = x; }
+            }
+        }
+
+        var bounds = maxX < 0 ? (SixLabors.ImageSharp.Rectangle?)null : new SixLabors.ImageSharp.Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1);
+
+        return new FrameDiffResult(index, diffCount, totalPixels, bounds, false);
     }
 
     public static void GenerateDiffHtml(string relativePath, ComparisonResult comparison, string baselinePath, string actualPath, string outputPath)
@@ -292,6 +418,14 @@ public static class VisualTestContext
             return;
         }
 
+        var dir = Path.GetDirectoryName(outputPath)!;
+        var framesRelative = Path.GetFileNameWithoutExtension(outputPath) + ".frames";
+        var reportRelative = Path.GetRelativePath(dir, ReportPath).Replace('\\', '/');
+        var baselineRelative = Path.GetRelativePath(dir, baselinePath).Replace('\\', '/');
+        var actualRelative = Path.GetRelativePath(dir, actualPath).Replace('\\', '/');
+
+        var exportedFrames = comparison.FrameDiffs.Where(f => f.Exported).ToList();
+
         var sb = new StringBuilder();
         sb.AppendLine("<!DOCTYPE html>");
         sb.AppendLine("<html><head><meta charset='utf-8'>");
@@ -299,73 +433,93 @@ public static class VisualTestContext
         sb.AppendLine("<style>");
         sb.AppendLine(DiffPageCss());
         sb.AppendLine("</style></head><body>");
-        var reportRelative = Path.GetRelativePath(Path.GetDirectoryName(outputPath)!, ReportPath).Replace('\\', '/');
         sb.AppendLine($"<div class='breadcrumb'><a href='{HtmlEncode(reportRelative)}'>&larr; Back to Report</a></div>");
         sb.AppendLine($"<h1>Visual Diff: {HtmlEncode(relativePath)}</h1>");
-        sb.AppendLine($"<div class='summary'>Baseline frames: {comparison.BaselineFrameCount} | Actual frames: {comparison.ActualFrameCount} | Diff pixels: {comparison.TotalDiffPixels:N0}</div>");
+
+        var changedFrames = comparison.FrameDiffs.Count(f => f.DiffPixelCount > 0);
+        sb.AppendLine($"<div class='summary'>Baseline {comparison.BaselineFrameCount} frames | Actual {comparison.ActualFrameCount} frames | {changedFrames} changed frame{(changedFrames == 1 ? "" : "s")} | {comparison.TotalDiffPixels:N0} diff pixels</div>");
+
+        if (comparison.SuppressedFrames > 0)
+        {
+            sb.AppendLine($"<div class='warn'>Showing the first {comparison.ExportedFrames:N0} changed frames; {comparison.SuppressedFrames:N0} more were left out of the stepper. The Animation view still plays the complete files.</div>");
+        }
+
+        if (comparison.UnpairedFrames > 0)
+        {
+            var longer = comparison.ActualFrameCount > comparison.BaselineFrameCount ? "actual" : "baseline";
+            sb.AppendLine($"<div class='warn'>Frame counts differ: {comparison.UnpairedFrames:N0} frame(s) exist only in the {longer}. Those have nothing to sit beside, so they are not in the stepper &mdash; use the Animation view to see them.</div>");
+        }
+
         sb.AppendLine($"<div class='timestamp'>Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}</div>");
 
         sb.AppendLine("<div class='tabs'>");
-        sb.AppendLine("<button class='tab active' onclick='setView(\"sidebyside\")'>Side by Side</button>");
-        sb.AppendLine("<button class='tab' onclick='setView(\"baseline\")'>Baseline</button>");
-        sb.AppendLine("<button class='tab' onclick='setView(\"actual\")'>Actual</button>");
-        sb.AppendLine("<button class='tab' onclick='setView(\"diff\")'>Diff</button>");
-        sb.AppendLine("<button class='tab' onclick='setView(\"overlay\")'>Overlay</button>");
-        sb.AppendLine("<button class='tab' onclick='setView(\"toggle\")'>Toggle</button>");
+        sb.AppendLine("<button class='tab active' data-view='sidebyside' onclick='setView(\"sidebyside\")'>Side by Side</button>");
+        sb.AppendLine("<button class='tab' data-view='baseline' onclick='setView(\"baseline\")'>Baseline</button>");
+        sb.AppendLine("<button class='tab' data-view='actual' onclick='setView(\"actual\")'>Actual</button>");
+        sb.AppendLine("<button class='tab' data-view='diff' onclick='setView(\"diff\")'>Diff</button>");
+        sb.AppendLine("<button class='tab' data-view='toggle' onclick='setView(\"toggle\")'>Toggle</button>");
+        sb.AppendLine("<button class='tab' data-view='animation' onclick='setView(\"animation\")'>Animation</button>");
+        sb.AppendLine("<span class='nav-sep'>|</span>");
+        sb.AppendLine("<button class='tab' id='zoomTab' onclick='toggleZoom()'>Zoom to change</button>");
         sb.AppendLine("</div>");
-
-        var baselineFrames = ExtractFramesAsBase64(baselinePath);
-        var actualFrames = ExtractFramesAsBase64(actualPath);
-        var diffFrames = new List<string>();
-
-        foreach (var fd in comparison.FrameDiffs)
-        {
-            if (fd.DiffImage != null)
-            {
-                diffFrames.Add(ImageToBase64(fd.DiffImage));
-                fd.DiffImage.Dispose();
-            }
-            else
-            {
-                diffFrames.Add("");
-            }
-        }
-
-        sb.AppendLine("<script>");
-        sb.AppendLine($"const baselineFrames = {JsonArrayFromList(baselineFrames)};");
-        sb.AppendLine($"const actualFrames = {JsonArrayFromList(actualFrames)};");
-        sb.AppendLine($"const diffFrames = {JsonArrayFromList(diffFrames)};");
-        sb.AppendLine($"const frameDiffs = [{string.Join(",", comparison.FrameDiffs.Select(f => f.DiffPixelCount))}];");
-        sb.AppendLine($"const frameTotals = [{string.Join(",", comparison.FrameDiffs.Select(f => f.TotalPixels))}];");
-        sb.AppendLine($"let currentFrame = 0;");
-        sb.AppendLine($"let currentView = 'sidebyside';");
-        sb.AppendLine(DiffPageJs());
-        sb.AppendLine("</script>");
 
         sb.AppendLine("<div class='frame-nav'>");
         sb.AppendLine("<button class='nav-btn' onclick='prevFrame()' title='Left Arrow'>&larr; Prev</button>");
-        sb.AppendLine("<span id='frameCounter'>Frame 1 / 1</span>");
+        sb.AppendLine("<span id='frameCounter'></span>");
         sb.AppendLine("<button class='nav-btn' onclick='nextFrame()' title='Right Arrow'>Next &rarr;</button>");
-        sb.AppendLine("<span class='nav-sep'>|</span>");
-        sb.AppendLine("<button class='nav-btn diff-btn' onclick='prevDiff()' title='PgUp'>&laquo; Prev Change</button>");
-        sb.AppendLine("<span id='diffCounter'></span>");
-        sb.AppendLine("<button class='nav-btn diff-btn' onclick='nextDiff()' title='PgDown'>Next Change &raquo;</button>");
         sb.AppendLine("<span class='nav-sep'>|</span>");
         sb.AppendLine("<span id='frameStats'></span>");
         sb.AppendLine("</div>");
 
+        sb.AppendLine("<div id='sparkline' class='sparkline' title='Changed pixels per frame - click to jump'></div>");
         sb.AppendLine("<div id='viewer' class='viewer'></div>");
-        sb.AppendLine("<script>updateView();</script>");
+
+        sb.AppendLine("<script>");
+        sb.AppendLine($"const framesDir = {JsonString(framesRelative)};");
+        sb.AppendLine($"const baselineApng = {JsonString(baselineRelative)};");
+        sb.AppendLine($"const actualApng = {JsonString(actualRelative)};");
+        sb.AppendLine($"const canvasW = {CanvasWidth}, canvasH = {CanvasHeight};");
+
+        // Only changed frames are exported, so the stepper walks those rather than every frame of
+        // the animation - on a regression the identical frames in between are not what you need.
+        sb.AppendLine($"const frames = [{string.Join(",", exportedFrames.Select(FrameJson))}];");
+        sb.AppendLine($"const totalPixels = {(long)CanvasWidth * CanvasHeight};");
+        sb.AppendLine("let currentFrame = 0;");
+        sb.AppendLine("let currentView = 'sidebyside';");
+        sb.AppendLine("let zoomed = false;");
+        sb.AppendLine(DiffPageJs());
+        sb.AppendLine("</script>");
+
         sb.AppendLine("</body></html>");
 
         System.IO.File.WriteAllText(outputPath, sb.ToString());
     }
 
+    private static string FrameJson(FrameDiffResult frame)
+    {
+        var bounds = frame.DiffBounds is { } b
+            ? $"[{b.X},{b.Y},{b.Width},{b.Height}]"
+            : "null";
+
+        return $"{{i:{frame.FrameIndex},d:{frame.DiffPixelCount},b:{bounds}}}";
+    }
+
+    private static string JsonString(string value)
+    {
+        return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    }
+
+    /// <summary>
+    /// Page for a file with no baseline yet. There is nothing to compare, so it just plays the
+    /// render - which the browser does natively from the APNG, at no extraction cost.
+    /// </summary>
     public static void GenerateViewHtml(string relativePath, string actualPath, int frameCount, string outputPath)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
 
-        var actualFrames = ExtractFramesAsBase64(actualPath);
+        var dir = Path.GetDirectoryName(outputPath)!;
+        var reportRelative = Path.GetRelativePath(dir, ReportPath).Replace('\\', '/');
+        var actualRelative = Path.GetRelativePath(dir, actualPath).Replace('\\', '/');
 
         var sb = new StringBuilder();
         sb.AppendLine("<!DOCTYPE html>");
@@ -374,33 +528,13 @@ public static class VisualTestContext
         sb.AppendLine("<style>");
         sb.AppendLine(DiffPageCss());
         sb.AppendLine("</style></head><body>");
-        var reportRelative = Path.GetRelativePath(Path.GetDirectoryName(outputPath)!, ReportPath).Replace('\\', '/');
         sb.AppendLine($"<div class='breadcrumb'><a href='{HtmlEncode(reportRelative)}'>&larr; Back to Report</a></div>");
         sb.AppendLine($"<h1>New: {HtmlEncode(relativePath)}</h1>");
-        sb.AppendLine($"<div class='summary'>{frameCount} frame{(frameCount != 1 ? "s" : "")} | No baseline</div>");
+        sb.AppendLine($"<div class='summary'>{frameCount} frame{(frameCount != 1 ? "s" : "")} | No baseline &mdash; accept it to make this the reference</div>");
         sb.AppendLine($"<div class='timestamp'>Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}</div>");
-
-        sb.AppendLine("<script>");
-        sb.AppendLine($"const baselineFrames = [];");
-        sb.AppendLine($"const actualFrames = {JsonArrayFromList(actualFrames)};");
-        sb.AppendLine($"const diffFrames = [];");
-        sb.AppendLine($"const frameDiffs = [{string.Join(",", Enumerable.Repeat("0", frameCount))}];");
-        sb.AppendLine($"const frameTotals = [{string.Join(",", Enumerable.Repeat("0", frameCount))}];");
-        sb.AppendLine($"let currentFrame = 0;");
-        sb.AppendLine($"let currentView = 'actual';");
-        sb.AppendLine(DiffPageJs());
-        sb.AppendLine("</script>");
-
-        sb.AppendLine("<div class='frame-nav'>");
-        sb.AppendLine("<button class='nav-btn' onclick='prevFrame()' title='Left Arrow'>&larr; Prev</button>");
-        sb.AppendLine("<span id='frameCounter'>Frame 1 / 1</span>");
-        sb.AppendLine("<button class='nav-btn' onclick='nextFrame()' title='Right Arrow'>Next &rarr;</button>");
-        sb.AppendLine("<span class='nav-sep'>|</span>");
-        sb.AppendLine("<span id='frameStats'></span>");
+        sb.AppendLine("<div class='viewer'>");
+        sb.AppendLine($"<div class='panel solo'><h3>Render</h3><img src='{HtmlEncode(actualRelative)}' alt='render'></div>");
         sb.AppendLine("</div>");
-
-        sb.AppendLine("<div id='viewer' class='viewer'></div>");
-        sb.AppendLine("<script>updateView();</script>");
         sb.AppendLine("</body></html>");
 
         System.IO.File.WriteAllText(outputPath, sb.ToString());
@@ -439,20 +573,24 @@ public static class VisualTestContext
         sb.AppendLine("</div>");
 
         sb.AppendLine("<div class='filters'>");
-        sb.AppendLine("<button class='filter' onclick='filterBy(\"all\")'>All</button>");
-        sb.AppendLine("<button class='filter active' onclick='filterBy(\"fail\")'>Failed</button>");
-        sb.AppendLine("<button class='filter' onclick='filterBy(\"pass\")'>Passed</button>");
-        sb.AppendLine("<button class='filter' onclick='filterBy(\"new\")'>New</button>");
-        sb.AppendLine("<button class='filter' onclick='filterBy(\"reviewed\")'>Reviewed</button>");
-        sb.AppendLine("<button class='filter' onclick='filterBy(\"unreviewed\")'>Unreviewed</button>");
+        sb.AppendLine("<button class='filter' onclick='filterBy(\"all\", this)'>All</button>");
+        sb.AppendLine("<button class='filter active' onclick='filterBy(\"fail\", this)'>Failed</button>");
+        sb.AppendLine("<button class='filter' onclick='filterBy(\"pass\", this)'>Passed</button>");
+        sb.AppendLine("<button class='filter' onclick='filterBy(\"new\", this)'>New</button>");
+        sb.AppendLine("<button class='filter' onclick='filterBy(\"reviewed\", this)'>Reviewed</button>");
+        sb.AppendLine("<button class='filter' onclick='filterBy(\"unreviewed\", this)'>Unreviewed</button>");
         if (errors > 0)
         {
-            sb.AppendLine("<button class='filter' onclick='filterBy(\"error\")'>Errors</button>");
+            sb.AppendLine("<button class='filter' onclick='filterBy(\"error\", this)'>Errors</button>");
         }
+
+        // 373 rows is too many to scan by eye when you are looking for one file.
+        sb.AppendLine("<input id='search' class='search' type='search' placeholder='Filter by name...' oninput='searchBy(this.value)'>");
+        sb.AppendLine("<span id='shownCount' class='shown-count'></span>");
         sb.AppendLine("</div>");
 
         sb.AppendLine("<table id='results'>");
-        sb.AppendLine("<thead><tr><th>Status</th><th>File</th><th>Frames</th><th>Diff Pixels</th><th>Details</th><th>Reviewed</th></tr></thead>");
+        sb.AppendLine("<thead><tr><th>Status</th><th>File</th><th class='sortable' onclick='sortBy(\"frames\")'>Frames &#8645;</th><th class='sortable' onclick='sortBy(\"diffframes\")'>Changed Frames &#8645;</th><th class='sortable' onclick='sortBy(\"diffpixels\")'>Diff Pixels &#8645;</th><th>Details</th><th>Reviewed</th></tr></thead>");
         sb.AppendLine("<tbody>");
 
         foreach (var result in sorted)
@@ -468,10 +606,13 @@ public static class VisualTestContext
             };
 
             var fileKey = HtmlEncode(result.RelativePath).Replace("\\", "/");
-            sb.AppendLine($"<tr class='row {statusClass}' data-status='{statusClass}' data-file='{fileKey}'>");
+            sb.AppendLine($"<tr class='row {statusClass}' data-status='{statusClass}' data-file='{fileKey}' data-frames='{result.FrameCount}' data-diffframes='{result.DiffFrameCount}' data-diffpixels='{result.TotalDiffPixels}'>");
             sb.AppendLine($"<td class='status {statusClass}'>{statusIcon}</td>");
             sb.AppendLine($"<td>{HtmlEncode(result.RelativePath)}</td>");
             sb.AppendLine($"<td>{result.FrameCount}</td>");
+            // Already computed per result but never surfaced: how much of the animation moved,
+            // which separates a one-frame blip from a regression running through the whole file.
+            sb.AppendLine($"<td>{(result.DiffFrameCount > 0 ? $"{result.DiffFrameCount:N0} / {result.FrameCount:N0}" : "")}</td>");
             sb.AppendLine($"<td>{(result.TotalDiffPixels > 0 ? result.TotalDiffPixels.ToString("N0") : "")}</td>");
 
             if (result.DiffHtmlPath != null)
@@ -503,13 +644,13 @@ public static class VisualTestContext
             if (newCount > 0)
             {
                 sb.AppendLine("<h3>Accept All New</h3>");
-                sb.AppendLine("<pre class='command'>powershell -File accept-baselines.ps1 -NewOnly</pre>");
+                sb.AppendLine("<pre class='command'>powershell -File tools/accept-baselines.ps1 -NewOnly</pre>");
             }
 
             if (failed > 0)
             {
                 sb.AppendLine("<h3>Accept All Changed</h3>");
-                sb.AppendLine("<pre class='command'>powershell -File accept-baselines.ps1 -All</pre>");
+                sb.AppendLine("<pre class='command'>powershell -File tools/accept-baselines.ps1 -All</pre>");
             }
 
             sb.AppendLine("<h3>Git Commands</h3>");
@@ -562,60 +703,9 @@ public static class VisualTestContext
         System.IO.File.WriteAllText(outputPath, sb.ToString());
     }
 
-    /// <summary>
-    /// Streams frames out of an APNG as base64 PNGs. Uses <see cref="ApngReader"/> rather than
-    /// <see cref="Image.Load{TPixel}(string)"/> so only one canvas is live at a time; loading the
-    /// whole animation costs gigabytes on the longer corpus files.
-    /// </summary>
-    private static List<string> ExtractFramesAsBase64(string apngPath)
-    {
-        var frames = new List<string>();
-
-        using var stream = System.IO.File.OpenRead(apngPath);
-        using var reader = new ApngReader(stream, leaveOpen: true);
-
-        var pixels = new byte[reader.Width * reader.Height * 4];
-
-        while (reader.TryReadFrame(pixels))
-        {
-            using var singleFrame = Image.LoadPixelData<Rgba32>(pixels, reader.Width, reader.Height);
-
-            frames.Add(ImageToBase64(singleFrame));
-        }
-
-        return frames;
-    }
-
-    private static string ImageToBase64(Image<Rgba32> image)
-    {
-        using var ms = new MemoryStream();
-        image.SaveAsPng(ms);
-        return Convert.ToBase64String(ms.ToArray());
-    }
-
     private static string HtmlEncode(string text)
     {
         return System.Net.WebUtility.HtmlEncode(text);
-    }
-
-    private static string JsonArrayFromList(List<string> items)
-    {
-        var sb = new StringBuilder("[");
-
-        for (int i = 0; i < items.Count; i++)
-        {
-            if (i > 0)
-            {
-                sb.Append(',');
-            }
-
-            sb.Append('"');
-            sb.Append(items[i]);
-            sb.Append('"');
-        }
-
-        sb.Append(']');
-        return sb.ToString();
     }
 
     private static string ReportCss() => """
@@ -630,7 +720,12 @@ public static class VisualTestContext
         .stat.new { background: #2e2a00; color: #d29922; }
         .stat.error { background: #3d1417; color: #f85149; }
         .stat.total { background: #161b22; color: #8b949e; }
-        .filters { margin-bottom: 16px; display: flex; gap: 8px; }
+        .filters { margin-bottom: 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .search { margin-left: auto; padding: 6px 10px; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9; border-radius: 6px; min-width: 220px; }
+        .search:focus { outline: none; border-color: #58a6ff; }
+        .shown-count { color: #8b949e; font-size: 13px; min-width: 70px; text-align: right; }
+        th.sortable { cursor: pointer; user-select: none; }
+        th.sortable:hover { color: #58a6ff; }
         .filter { padding: 6px 12px; border: 1px solid #30363d; background: #161b22; color: #c9d1d9; border-radius: 6px; cursor: pointer; }
         .filter.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
         table { width: 100%; border-collapse: collapse; background: #161b22; border-radius: 8px; overflow: hidden; }
@@ -710,25 +805,71 @@ public static class VisualTestContext
             });
         }
 
-        function filterBy(status) {
-            document.querySelectorAll('.filter').forEach(b => b.classList.remove('active'));
-            event.target.classList.add('active');
+        let currentStatus = 'fail';
+        let currentSearch = '';
+
+        // Takes the clicked button explicitly. It used to read the global `event`, which is
+        // undefined when this is called directly on load - that threw, and everything registered
+        // after it (the click-to-copy handlers) silently never ran.
+        function filterBy(status, btn) {
+            currentStatus = status;
+
+            if (btn) {
+                document.querySelectorAll('.filter').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+            }
+
+            applyFilters();
+        }
+
+        function searchBy(text) {
+            currentSearch = text.trim().toLowerCase();
+            applyFilters();
+        }
+
+        function applyFilters() {
+            let shown = 0;
+
             document.querySelectorAll('.row').forEach(row => {
-                let show = false;
-                if (status === 'all') show = true;
-                else if (status === 'reviewed') show = row.dataset.reviewed === 'true';
-                else if (status === 'unreviewed') show = row.dataset.reviewed !== 'true' && row.dataset.status === 'fail';
-                else show = row.dataset.status === status;
+                let show;
+                if (currentStatus === 'all') show = true;
+                else if (currentStatus === 'reviewed') show = row.dataset.reviewed === 'true';
+                else if (currentStatus === 'unreviewed') show = row.dataset.reviewed !== 'true' && row.dataset.status === 'fail';
+                else show = row.dataset.status === currentStatus;
+
+                if (show && currentSearch) {
+                    show = row.dataset.file.toLowerCase().includes(currentSearch);
+                }
 
                 row.classList.toggle('hidden', !show);
+                if (show) shown++;
             });
+
+            const count = document.getElementById('shownCount');
+            if (count) count.textContent = `${shown} shown`;
+        }
+
+        // Sorts by a numeric data attribute, descending first so the worst regression is on top.
+        let sortState = {};
+        function sortBy(key) {
+            const tbody = document.querySelector('#results tbody');
+            const rows = Array.from(tbody.querySelectorAll('.row'));
+            const desc = sortState[key] !== 'desc';
+            sortState = { [key]: desc ? 'desc' : 'asc' };
+
+            rows.sort((a, b) => {
+                const av = +(a.dataset[key] || 0), bv = +(b.dataset[key] || 0);
+                return desc ? bv - av : av - bv;
+            });
+
+            rows.forEach(r => tbody.appendChild(r));
         }
 
         // Init review buttons on load
         renderReviewButtons();
 
         // Default to showing failed
-        filterBy('fail');
+        filterBy('fail', document.querySelector('.filter.active'));
 
         document.querySelectorAll('.command').forEach(el => {
             el.title = 'Click to copy';
@@ -773,165 +914,152 @@ public static class VisualTestContext
         .viewer .panel { min-width: 300px; }
         .viewer .panel.solo { max-width: 100%; }
         .viewer .panel h3 { color: #8b949e; font-size: 13px; text-transform: uppercase; margin-bottom: 6px; }
+        .warn { background: #2d2416; border: 1px solid #7d5c1e; color: #d29922; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
+        .imgwrap { position: relative; border: 1px solid #30363d; border-radius: 4px; overflow: hidden; background: #010409; }
+        .imgwrap img { display: block; border: none; border-radius: 0; }
+        .sparkline { display: flex; align-items: flex-end; gap: 1px; height: 32px; margin-bottom: 16px; padding: 2px; background: #161b22; border: 1px solid #30363d; border-radius: 4px; overflow-x: auto; }
+        .spark { flex: 0 0 3px; background: #f85149; opacity: 0.55; cursor: pointer; border-radius: 1px; }
+        .spark:hover { opacity: 1; }
+        .spark.on { background: #58a6ff; opacity: 1; }
         """;
 
     private static string DiffPageJs() => """
-        // Build index of frames where the diff PATTERN changes — not just every differing frame.
-        // A "change point" is where the diff pixel count transitions (0→N, N→0, or N→M different).
-        const changeIndices = [];
-        let prevDiffCount = -1;
-        for (let i = 0; i < frameDiffs.length; i++) {
-            if (frameDiffs[i] !== prevDiffCount) {
-                changeIndices.push(i);
-                prevDiffCount = frameDiffs[i];
-            }
-        }
+        const pad = n => String(n).padStart(6, '0');
+        const srcFor = (kind, i) => `${framesDir}/${kind}${pad(i)}.png`;
 
-        function maxFrames() { return Math.max(baselineFrames.length, actualFrames.length, diffFrames.length); }
         function prevFrame() { if (currentFrame > 0) { currentFrame--; updateView(); } }
-        function nextFrame() { if (currentFrame < maxFrames() - 1) { currentFrame++; updateView(); } }
-
-        function prevDiff() {
-            for (let i = changeIndices.length - 1; i >= 0; i--) {
-                if (changeIndices[i] < currentFrame) {
-                    currentFrame = changeIndices[i];
-                    updateView();
-                    return;
-                }
-            }
-        }
-
-        function nextDiff() {
-            for (let i = 0; i < changeIndices.length; i++) {
-                if (changeIndices[i] > currentFrame) {
-                    currentFrame = changeIndices[i];
-                    updateView();
-                    return;
-                }
-            }
-        }
+        function nextFrame() { if (currentFrame < frames.length - 1) { currentFrame++; updateView(); } }
 
         function setView(v) {
             currentView = v;
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            event.target.classList.add('active');
+            document.querySelectorAll('.tab[data-view]').forEach(t => t.classList.toggle('active', t.dataset.view === v));
             updateView();
         }
 
-        function updateView() {
-            const fc = document.getElementById('frameCounter');
-            fc.textContent = `Frame ${currentFrame + 1} / ${maxFrames()}`;
+        function toggleZoom() {
+            zoomed = !zoomed;
+            document.getElementById('zoomTab').classList.toggle('active', zoomed);
+            updateView();
+        }
 
-            const dc = document.getElementById('diffCounter');
-            const changeIdx = changeIndices.indexOf(currentFrame);
-            if (changeIdx >= 0) {
-                dc.textContent = `Change ${changeIdx + 1} / ${changeIndices.length}`;
-                dc.style.color = '#f85149';
-            } else {
-                dc.textContent = `${changeIndices.length} change${changeIndices.length !== 1 ? 's' : ''}`;
-                dc.style.color = '#d29922';
-            }
+        // Scales the changed region up to fill the panel. A handful of differing pixels on a
+        // 1024x768 canvas is otherwise invisible at page scale, which is the common case for the
+        // regressions worth chasing.
+        function zoomStyle() {
+            const box = frames[currentFrame] && frames[currentFrame].b;
+            if (!zoomed || !box) { return { wrap: '', img: '' }; }
+
+            const [x, y, w, h] = box;
+            // Pad the box so the change has visible context around it.
+            const padPx = Math.max(16, Math.round(Math.max(w, h) * 0.25));
+            const zx = Math.max(0, x - padPx), zy = Math.max(0, y - padPx);
+            const zw = Math.min(canvasW - zx, w + padPx * 2), zh = Math.min(canvasH - zy, h + padPx * 2);
+            const scale = Math.min(8, Math.max(1, 480 / Math.max(zw, zh)));
+
+            return {
+                wrap: `overflow:hidden;width:${Math.round(zw * scale)}px;height:${Math.round(zh * scale)}px;`,
+                img: `width:${canvasW * scale}px;height:${canvasH * scale}px;max-width:none;margin-left:${-zx * scale}px;margin-top:${-zy * scale}px;`
+            };
+        }
+
+        function panel(title, kind, extraClass) {
+            const f = frames[currentFrame];
+            const z = zoomStyle();
+            return `<div class='panel ${extraClass || ''}'><h3>${title}</h3>
+                <div class='imgwrap' style='${z.wrap}'><img loading='lazy' src='${srcFor(kind, f.i)}' style='${z.img}'></div></div>`;
+        }
+
+        function updateView() {
+            const f = frames[currentFrame];
+
+            document.getElementById('frameCounter').textContent =
+                frames.length ? `Change ${currentFrame + 1} / ${frames.length} (frame ${f.i})` : 'No exported frames';
 
             const fs = document.getElementById('frameStats');
-            if (frameDiffs[currentFrame] > 0) {
-                const pct = ((frameDiffs[currentFrame] / frameTotals[currentFrame]) * 100).toFixed(2);
-                fs.textContent = `${frameDiffs[currentFrame].toLocaleString()} pixels differ (${pct}%)`;
-                fs.style.color = '#f85149';
+            if (f) {
+                const pct = ((f.d / totalPixels) * 100).toFixed(3);
+                const box = f.b ? ` in ${f.b[2]}x${f.b[3]} at ${f.b[0]},${f.b[1]}` : '';
+                fs.textContent = `${f.d.toLocaleString()} pixels differ (${pct}%)${box}`;
             } else {
-                fs.textContent = 'Identical';
-                fs.style.color = '#3fb950';
+                fs.textContent = '';
             }
 
-            // Update button disabled states
             const btns = document.querySelectorAll('.nav-btn');
             btns[0].disabled = currentFrame <= 0;
-            btns[1].disabled = currentFrame >= maxFrames() - 1;
-            btns[2].disabled = !changeIndices.some(i => i < currentFrame);
-            btns[3].disabled = !changeIndices.some(i => i > currentFrame);
+            btns[1].disabled = currentFrame >= frames.length - 1;
 
             const viewer = document.getElementById('viewer');
-            const bSrc = currentFrame < baselineFrames.length ? `data:image/png;base64,${baselineFrames[currentFrame]}` : '';
-            const aSrc = currentFrame < actualFrames.length ? `data:image/png;base64,${actualFrames[currentFrame]}` : '';
-            const dSrc = currentFrame < diffFrames.length && diffFrames[currentFrame] ? `data:image/png;base64,${diffFrames[currentFrame]}` : '';
+
+            if (currentView === 'animation') {
+                // Browsers animate APNG natively, so the whole file costs one <img> each and needs
+                // no per-frame export at all.
+                viewer.innerHTML = `<div class='row-pair'>
+                    <div class='panel'><h3>Baseline</h3><img src='${baselineApng}'></div>
+                    <div class='panel'><h3>Actual</h3><img src='${actualApng}'></div></div>`;
+                return;
+            }
+
+            if (!f) { viewer.innerHTML = `<div class='panel solo'><h3>Nothing to show</h3></div>`; return; }
 
             if (currentView === 'sidebyside') {
-                viewer.innerHTML = `
-                    <div class='row-pair'>
-                        <div class='panel'><h3>Baseline</h3><img src='${bSrc}'></div>
-                        <div class='panel'><h3>Actual</h3><img src='${aSrc}'></div>
-                    </div>
-                    ${dSrc ? `<div class='row-diff'><div class='panel'><h3>Diff</h3><img src='${dSrc}'></div></div>` : ''}`;
+                viewer.innerHTML = `<div class='row-pair'>${panel('Baseline', 'b')}${panel('Actual', 'a')}</div>
+                    <div class='row-diff'>${panel('Diff', 'd')}</div>`;
             } else if (currentView === 'baseline') {
-                viewer.innerHTML = `<div class='panel solo'><h3>Baseline</h3><img src='${bSrc}'></div>`;
+                viewer.innerHTML = panel('Baseline', 'b', 'solo');
             } else if (currentView === 'actual') {
-                viewer.innerHTML = `<div class='panel solo'><h3>Actual</h3><img src='${aSrc}'></div>`;
+                viewer.innerHTML = panel('Actual', 'a', 'solo');
             } else if (currentView === 'diff') {
-                viewer.innerHTML = dSrc
-                    ? `<div class='panel solo'><h3>Diff</h3><img src='${dSrc}'></div>`
-                    : `<div class='panel solo'><h3>No differences</h3></div>`;
-            } else if (currentView === 'overlay') {
-                viewer.innerHTML = dSrc
-                    ? `<div class='panel'><h3>Diff Overlay</h3><img src='${dSrc}'></div>`
-                    : `<div class='panel'><h3>No differences</h3></div>`;
+                viewer.innerHTML = panel('Diff', 'd', 'solo');
             } else {
-                // Toggle mode: preserve toggle state across frame changes
-                const toggleImg = document.getElementById('toggleImg');
-                if (toggleImg) {
-                    // Just update the sources without rebuilding the DOM
-                    window._toggleBaseline = bSrc;
-                    window._toggleActual = aSrc;
-                    toggleImg.src = window._toggleState ? aSrc : bSrc;
-                } else {
-                    // First render of toggle mode
-                    viewer.innerHTML = `<div class='panel'><h3 id='toggleLabel'>Baseline (click to toggle)</h3><img id='toggleImg' src='${bSrc}' style='cursor:pointer' onclick='toggleImage()'></div>`;
-                    window._toggleState = false;
-                    window._toggleBaseline = bSrc;
-                    window._toggleActual = aSrc;
-                }
+                const z = zoomStyle();
+                viewer.innerHTML = `<div class='panel'><h3 id='toggleLabel'>Baseline (click to toggle)</h3>
+                    <div class='imgwrap' style='${z.wrap}'><img id='toggleImg' src='${srcFor('b', f.i)}' style='cursor:pointer;${z.img}' onclick='toggleImage()'></div></div>`;
+                window._toggleState = false;
             }
+
+            markCurrent();
         }
 
         function toggleImage() {
             window._toggleState = !window._toggleState;
-            document.getElementById('toggleImg').src = window._toggleState ? window._toggleActual : window._toggleBaseline;
-            document.getElementById('toggleLabel').textContent = window._toggleState ? 'Actual (click to toggle)' : 'Baseline (click to toggle)';
+            const f = frames[currentFrame];
+            document.getElementById('toggleImg').src = srcFor(window._toggleState ? 'a' : 'b', f.i);
+            document.getElementById('toggleLabel').textContent =
+                window._toggleState ? 'Actual (click to toggle)' : 'Baseline (click to toggle)';
         }
 
-        // Keyboard navigation
+        // Bar per changed frame, height proportional to how much changed - shows at a glance
+        // whether a regression is one blip or a drift running through the whole animation.
+        function buildSparkline() {
+            const el = document.getElementById('sparkline');
+            if (!frames.length) { el.style.display = 'none'; return; }
+
+            const max = Math.max(...frames.map(f => f.d));
+            el.innerHTML = frames.map((f, n) =>
+                `<span class='spark' data-n='${n}' title='frame ${f.i}: ${f.d.toLocaleString()} px'
+                    style='height:${Math.max(2, Math.round((f.d / max) * 28))}px'></span>`).join('');
+
+            el.addEventListener('click', e => {
+                const n = e.target.dataset.n;
+                if (n !== undefined) { currentFrame = +n; updateView(); }
+            });
+        }
+
+        function markCurrent() {
+            document.querySelectorAll('.spark').forEach((s, n) => s.classList.toggle('on', n === currentFrame));
+        }
+
         document.addEventListener('keydown', function(e) {
             switch (e.key) {
-                case 'ArrowLeft':
-                    e.preventDefault();
-                    prevFrame();
-                    break;
-                case 'ArrowRight':
-                    e.preventDefault();
-                    nextFrame();
-                    break;
-                case 'PageUp':
-                    e.preventDefault();
-                    prevDiff();
-                    break;
-                case 'PageDown':
-                    e.preventDefault();
-                    nextDiff();
-                    break;
-                case 'Home':
-                    e.preventDefault();
-                    currentFrame = 0;
-                    updateView();
-                    break;
-                case 'End':
-                    e.preventDefault();
-                    currentFrame = maxFrames() - 1;
-                    updateView();
-                    break;
+                case 'ArrowLeft': e.preventDefault(); prevFrame(); break;
+                case 'ArrowRight': e.preventDefault(); nextFrame(); break;
+                case 'Home': e.preventDefault(); currentFrame = 0; updateView(); break;
+                case 'End': e.preventDefault(); currentFrame = frames.length - 1; updateView(); break;
+                case 'z': case 'Z': toggleZoom(); break;
             }
         });
 
-        // Jump to first change point on load if frame 0 is identical
-        if (changeIndices.length > 0 && frameDiffs[0] === 0) {
-            currentFrame = changeIndices.find(i => frameDiffs[i] > 0) ?? changeIndices[0];
-        }
+        buildSparkline();
+        updateView();
         """;
 }

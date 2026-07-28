@@ -85,7 +85,10 @@ public class VisualRegressionTest
                 return;
             }
 
-            var comparison = VisualTestContext.CompareApngs(baselinePath, actualPath);
+            // Differing frames are written next to the diff page as it compares, so the page can
+            // reference them instead of inlining every frame as base64.
+            var framesDir = Path.Combine(Path.GetDirectoryName(diffHtmlPath)!, Path.GetFileNameWithoutExtension(diffHtmlPath) + ".frames");
+            var comparison = VisualTestContext.CompareApngs(baselinePath, actualPath, framesDir);
 
             if (comparison.AreIdentical)
             {
@@ -95,11 +98,6 @@ public class VisualRegressionTest
             }
 
             VisualTestContext.GenerateDiffHtml(relativePath, comparison, baselinePath, actualPath, diffHtmlPath);
-
-            foreach (var fd in comparison.FrameDiffs)
-            {
-                fd.DiffImage?.Dispose();
-            }
 
             VisualTestContext.Results[relativePath] = new VisualTestResult(relativePath, VisualTestStatus.Fail, baselinePath, actualPath, diffHtmlPath, frameCount, comparison.FrameDiffs.Count(f => f.DiffPixelCount > 0), comparison.TotalDiffPixels, null);
             failures.Add(relativePath);

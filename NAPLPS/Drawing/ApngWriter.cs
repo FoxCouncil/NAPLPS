@@ -23,7 +23,7 @@ namespace NAPLPS.Drawing;
 /// the rest of the canvas persists. That makes a frame's meaning independent of how the previous
 /// one was composited.
 /// </summary>
-internal sealed class ApngWriter : IDisposable
+public sealed class ApngWriter : IDisposable
 {
     private static readonly uint[] CrcTable = BuildCrcTable();
 
