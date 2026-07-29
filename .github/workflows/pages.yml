@@ -1,0 +1,81 @@
+# Publishes the visual corpus to GitHub Pages: a gallery of every committed baseline plus
+# before/after pages for the last few commits that changed how the renderer draws.
+#
+# Old baseline versions are read straight out of git rather than stored anywhere, so the history
+# section costs nothing to keep and cannot drift from what was actually committed. That is also why
+# this needs a deep-ish checkout: a shallow clone has no history to diff against.
+#
+# Runs only when something that affects the site changes, because a full build copies the whole
+# corpus and re-encodes a poster and thumbnail for each of the 372 renders.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'NAPLPSTests/Visual/Baselines/**'
+      - 'NAPLPSSite/**'
+      - 'Examples/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+    inputs:
+      history:
+        description: 'How many baseline-changing commits to include'
+        required: false
+        default: '5'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; a half-published site is worse than a stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Enough history to cover the commits the site shows, with room to spare - the generator
+          # walks back through commits that touched baselines, which can be sparse.
+          fetch-depth: 100
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      # Must come before the generator: every canonical URL, og:url and sitemap entry is absolute,
+      # so the site has to be built knowing where it will be served from.
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+        id: pages
+
+      - name: Build generator
+        run: dotnet build NAPLPSSite/NAPLPSSite.csproj --configuration Release --nologo
+
+      - name: Generate site
+        run: >
+          dotnet run --project NAPLPSSite/NAPLPSSite.csproj --configuration Release --no-build --
+          --repo "$GITHUB_WORKSPACE"
+          --out "$GITHUB_WORKSPACE/_site"
+          --base-url "${{ steps.pages.outputs.base_url }}"
+          --history "${{ inputs.history || '5' }}"
+
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

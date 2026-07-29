@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>NAPLPSSite</RootNamespace>
+    <AssemblyName>naplps-site</AssemblyName>
+    <!-- Build tool, not shipped: it never gets packed or published with the app. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NAPLPS\NAPLPS.csproj" />
+  </ItemGroup>
+
+</Project>

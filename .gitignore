@@ -445,3 +445,6 @@ tools/aot/swift/.build/
 tools/aot/swift/Package.resolved
 tools/aot/zig/*.png
 tools/aot/swift/*.png
+
+# Generated static site (built by .github/workflows/pages.yml)
+_site/
