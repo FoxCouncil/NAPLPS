@@ -26,6 +26,21 @@ public class NaplpsSequence(NaplpsState state, NaplpsCommand command)
     [JsonIgnore]
     public byte[]? RawCodedBytes { get; set; }
 
+    /// <summary>
+    /// How many bytes this sequence occupies in the coded stream - the same accounting
+    /// <see cref="NaplpsFormat.ToBytes"/> performs. Synthetic sequences cost nothing because they
+    /// were never transmitted: a macro call is one byte on the wire however much it expands to.
+    ///
+    /// This is what paces an authentic render. A videotex terminal drew at the speed its bytes
+    /// arrived, so time on screen is a function of stream position, not of how many distinct frames
+    /// the drawing happens to produce.
+    /// </summary>
+    [JsonIgnore]
+    public int CodedByteLength =>
+        RawCodedBytes is { Length: > 0 } raw ? raw.Length
+        : IsSynthetic ? 0
+        : 1 + Command.Operands.Count;
+
     public void Deconstruct(out NaplpsCommand command, out NaplpsState state)
     {
         command = Command;

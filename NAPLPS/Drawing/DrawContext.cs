@@ -88,6 +88,17 @@ public class DrawContext : IDisposable
     /// </summary>
     public bool Antialias { get; set; }
 
+    /// <summary>
+    /// Line speed, in bits per second, used to pace an exported animation. NAPLPS drew as its bytes
+    /// arrived down a videotex link, so a frame's time on screen is the transmission time of the
+    /// commands it represents - 10 bits per byte, being 8N1 framing.
+    ///
+    /// 1200 is the common videotex rate and what Prodigy subscribers mostly saw. Set to 0 to fall
+    /// back to a flat per-frame delay, which paces by frame count instead and is wrong by anything
+    /// up to 30x depending on how much of a file coalesces into identical frames.
+    /// </summary>
+    public int BaudRate { get; set; } = 1200;
+
     public DrawContext() { }
 
     public DrawContext(NaplpsFormat naplps, Size size)
@@ -656,13 +667,13 @@ public class DrawContext : IDisposable
         var pngMeta = apng.Metadata.GetFormatMetadata(PngFormat.Instance);
         pngMeta.RepeatCount = loop ? (uint)0 : 1;
 
-        var baseDelay = new Rational((uint)delayHundredths, 1000);
+        var baseDelay = new Rational((uint)delayHundredths, DelayDenominator);
 
         bool firstFrame = true;
 
-        RenderFrameSequence(delayHundredths, (frame, multiplier) =>
+        RenderFrameSequence(delayHundredths, (frame, hundredths) =>
         {
-            AddApngFrame(apng, frame, baseDelay, multiplier, firstFrame);
+            AddApngFrame(apng, frame, new Rational((uint)hundredths, DelayDenominator), 1, firstFrame);
             firstFrame = false;
         });
 
@@ -740,14 +751,14 @@ public class DrawContext : IDisposable
                 ? new Rectangle(0, 0, size.Width, size.Height)
                 : ApngWriter.DirtyRect(canvas, previous, size.Width, size.Height);
 
-            writer.WriteFrame(canvas, rect, delayNumerator, 1000);
+            writer.WriteFrame(canvas, rect, delayNumerator, DelayDenominator);
 
             canvas.CopyTo(previous.AsSpan());
             first = false;
             frames++;
         }
 
-        RenderFrameSequence(delayHundredths, (frame, multiplier) => Emit(frame, (ushort)(delayHundredths * multiplier)));
+        RenderFrameSequence(delayHundredths, (frame, hundredths) => Emit(frame, (ushort)Math.Min(ushort.MaxValue, hundredths)));
 
         if (blinkCycles > 0 && NAPLPS.State.BlinkProcesses.Count > 0)
         {
@@ -765,10 +776,36 @@ public class DrawContext : IDisposable
     /// consumer that needs to keep it must copy. Shared by the in-memory and streaming APNG paths
     /// so the CLUT re-render and identical-frame coalescing cannot drift between them.
     /// </summary>
+    /// <summary>
+    /// Denominator for every APNG frame delay. Delays are quoted in HUNDREDTHS of a second, so this
+    /// is 100 - it was 1000, which silently made every render play ten times too fast: a nominal
+    /// 50ms frame was emitted as 5ms, so the whole corpus animated at 200fps instead of 20.
+    /// Twenty frames a second is about right for the era - NAPLPS drew as the bytes arrived over a
+    /// 1200-baud videotex link, which is roughly one short command every 50ms.
+    /// </summary>
+    private const ushort DelayDenominator = 100;
+
+    /// <summary>Transmission time of <paramref name="bytes"/>, in hundredths of a second.</summary>
+    private int BaudDelayHundredths(int bytes)
+    {
+        // 10 bits per byte (8N1). hundredths = bytes * 10 / baud * 100.
+        return Math.Max(1, (int)Math.Round(bytes * 1000.0 / BaudRate));
+    }
+
     private void RenderFrameSequence(int delayHundredths, Action<Image<Rgba32>, int> emitFrame)
     {
         Image<Rgba32>? previousFrame = null;
         int currentFrameDelayMultiplier = 1;
+
+        // Coded bytes attributed to the frame currently being held. Commands that coalesce into an
+        // unchanged frame still cost transmission time, which is why this is not just a frame count.
+        int currentFrameBytes = 0;
+
+        // Emits with baud pacing when enabled, otherwise the flat per-frame delay.
+        void Emit(Image<Rgba32> frame, int multiplier, int bytes)
+        {
+            emitFrame(frame, BaudRate > 0 ? BaudDelayHundredths(bytes) : delayHundredths * multiplier);
+        }
 
         // Running CLUT palette — tracks palette changes for CLUT animation.
         // When SetColorCommand modifies an entry followed by WaitCommand,
@@ -800,6 +837,8 @@ public class DrawContext : IDisposable
 
             CommandRendered?.Invoke(commandIndex, cmd, Image);
 
+            currentFrameBytes += sequence.CodedByteLength;
+
             // WaitCommand: capture current frame with the wait duration as delay.
             // CLUT animation: if palette changed before this wait, re-render first.
             if (cmd is WaitCommand waitCmd && waitCmd.IsValid)
@@ -813,14 +852,15 @@ public class DrawContext : IDisposable
                 // Commit the previous frame, then capture current state with wait delay
                 if (previousFrame != null)
                 {
-                    emitFrame(previousFrame, currentFrameDelayMultiplier);
+                    Emit(previousFrame, currentFrameDelayMultiplier, currentFrameBytes);
                     previousFrame.Dispose();
                 }
 
                 previousFrame = Image.Clone();
                 // PP3 doesn't parse WAIT timing — short fixed delay for CLUT animation frames.
-                // 150ms ≈ 15 hundredths → multiplier = 15 / delayHundredths
+                // 150ms ≈ 15 hundredths, expressed as bytes so baud pacing honours it too.
                 currentFrameDelayMultiplier = Math.Max(1, 15 / delayHundredths);
+                currentFrameBytes = BaudRate > 0 ? (int)Math.Round(BaudRate * 0.15 / 10) : 0;
             }
             // Only check for frame changes when something was actually drawn
             else if (drawable != null)
@@ -833,12 +873,13 @@ public class DrawContext : IDisposable
                 {
                     if (previousFrame != null)
                     {
-                        emitFrame(previousFrame, currentFrameDelayMultiplier);
+                        Emit(previousFrame, currentFrameDelayMultiplier, currentFrameBytes - sequence.CodedByteLength);
                         previousFrame.Dispose();
                     }
 
                     previousFrame = Image.Clone();
                     currentFrameDelayMultiplier = 1;
+                    currentFrameBytes = sequence.CodedByteLength;
                 }
             }
             else
@@ -852,7 +893,7 @@ public class DrawContext : IDisposable
 
         if (previousFrame != null)
         {
-            emitFrame(previousFrame, currentFrameDelayMultiplier);
+            Emit(previousFrame, currentFrameDelayMultiplier, currentFrameBytes);
             previousFrame.Dispose();
         }
     }
@@ -863,12 +904,12 @@ public class DrawContext : IDisposable
     /// </summary>
     private void AppendBlinkFrames(Image<Rgba32> apng, int cycles)
     {
-        var blinkDelay = new Rational(BlinkDelayNumerator, 1000);
+        var blinkDelay = new Rational(BlinkDelayNumerator, DelayDenominator);
 
         BlinkFrameSequence(cycles, (frame, multiplier) => AddApngFrame(apng, frame, blinkDelay, multiplier, replaceRoot: false));
     }
 
-    /// <summary>Base delay for a blink tick, in the same 1/1000s units the drawing frames use.</summary>
+    /// <summary>Base delay for a blink tick: 10/100s = the 100ms NAPLPS blink time unit.</summary>
     private const uint BlinkDelayNumerator = 10;
 
     /// <summary>
