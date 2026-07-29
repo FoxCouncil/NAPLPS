@@ -139,7 +139,9 @@ public static class Player
               this.bitmaps = [];
               this.index = -1;
               this.playing = false;
-              this.rate = 1;
+              // Files carry authentic 1200-baud timing, which on the smaller pieces is over
+              // before you have focused on it. Start at a quarter speed and let 1x mean real.
+              this.rate = 0.25;
               this.loop = false;   // deliberately off: a looping animation is hard to read
               this.timer = null;
 
