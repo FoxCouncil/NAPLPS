@@ -87,7 +87,12 @@ sealed class Program
         Console.WriteLine();
         Console.WriteLine("GIF Options:");
         Console.WriteLine("  --loop                Loop the GIF animation (default: no loop)");
-        Console.WriteLine("  --delay=N             Frame delay in 1/100s of a second (default: 5)");
+        Console.WriteLine("  --delay=N             Flat frame delay in 1/100s of a second; implies --baud=0");
+        Console.WriteLine();
+        Console.WriteLine("APNG Options:");
+        Console.WriteLine("  --baud=N              Pace drawing at N bits/sec as a videotex link would,");
+        Console.WriteLine("                        so a frame lasts as long as its bytes took to arrive");
+        Console.WriteLine("                        (default: 1200, 0 = flat --delay pacing)");
         Console.WriteLine();
         Console.WriteLine("Palette Animation Options:");
         Console.WriteLine("  --palette-anim        Export blink/palette animation as GIF");
@@ -260,6 +265,8 @@ sealed class Program
             var naplps = NaplpsFormat.FromFile(opts.InputFile, opts.ForceProdigy ? NaplpsSystemType.Prodigy : null);
             using var drawContext = new DrawContext(naplps, new SixLabors.ImageSharp.Size(width, height));
 
+            drawContext.BaudRate = opts.Baud;
+
             if (opts.GunWidthSet)
             {
                 drawContext.ColorGunWidth = opts.GunWidth;
@@ -307,7 +314,7 @@ sealed class Program
     private record ExportOptions(
         string InputFile, string? OutputFile, string? OutputDir,
         string Format, string Size, bool UseStdout, bool Loop,
-        bool Batch, bool PaletteAnim, int PaletteFrames, int Delay,
+        bool Batch, bool PaletteAnim, int PaletteFrames, int Delay, int Baud,
         string? AtFrames, int BlinkCycles, bool GunWidthSet, int? GunWidth, float? DisplayRatio, bool? HardText, bool Authentic, bool ForceProdigy);
 
     /// <summary>
@@ -353,6 +360,7 @@ sealed class Program
         var paletteAnim = false;
         var paletteFrames = 120;
         var delay = 5;
+        var baud = 1200;
         string? atFrames = null;
         var blinkCycles = 0;
         var gunWidthSet = false;
@@ -427,6 +435,18 @@ sealed class Program
                     error = "Error: Invalid delay value. Expected positive integer.";
                     break;
                 }
+
+                // An explicit flat delay and baud pacing are mutually exclusive: baud derives each
+                // frame's delay from the bytes it represents, which would silently discard this.
+                baud = 0;
+            }
+            else if (args[i].StartsWith("--baud="))
+            {
+                if (!int.TryParse(args[i]["--baud=".Length..], out baud) || baud < 0)
+                {
+                    error = "Error: Invalid baud value. Expected 0 (flat delay) or a positive integer.";
+                    break;
+                }
             }
             else if (args[i].StartsWith("--at="))
             {
@@ -472,7 +492,7 @@ sealed class Program
             }
         }
 
-        return new ExportOptions(inputFile, outputFile, outputDir, format, size, useStdout, loop, batch, paletteAnim, paletteFrames, delay, atFrames, blinkCycles, gunWidthSet, gunWidth, displayRatio, hardText, authentic, forceProdigy);
+        return new ExportOptions(inputFile, outputFile, outputDir, format, size, useStdout, loop, batch, paletteAnim, paletteFrames, delay, baud, atFrames, blinkCycles, gunWidthSet, gunWidth, displayRatio, hardText, authentic, forceProdigy);
     }
 
     private static int HandleBatchExport(string inputDir, string? outputDir, string format, int width, int height, bool loop, int delay, bool gunWidthSet, int? gunWidth, float? displayRatio, bool? hardText, bool authentic, bool forceProdigy)

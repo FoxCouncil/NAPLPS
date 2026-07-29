@@ -1,4 +1,4 @@
-// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
+﻿// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
 using Avalonia.Platform.Storage;
 
@@ -1008,6 +1008,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         if (vm.Format == ExportFormat.Apng)
         {
             int delayHundredths = System.Math.Max(1, vm.ApngFrameDelayMs / 10);
+
+            // The dialog offers an explicit frame delay, so honour it rather than the baud pacing
+            // DrawContext defaults to - otherwise the control would sit there doing nothing.
+            drawContext.BaudRate = 0;
 
             // Streams straight to the file: frame range and scale are applied as each frame is
             // produced, so a multi-thousand-frame export no longer has to fit in memory first.
