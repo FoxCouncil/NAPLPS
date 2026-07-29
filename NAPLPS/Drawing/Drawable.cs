@@ -274,20 +274,42 @@ public class Drawable
     }
 
     /// <summary>
-    /// Authentic pel for dotted/dashed line texture: a square P x P footprint where
-    /// P = round-half-up(|logPel.X| * width) (the reference render uses the X-scaled pel for both axes, e.g.
-    /// a 1/256 pel -> 3x3), plus the major-axis dash unit P. Offsets follow the sign of the logical
-    /// pel. Returns (ox0, ox1, oy0, oy1, pelMajor).
+    /// Authentic pel for dotted/dashed line texture: the pel footprint with BOTH axes scaled by
+    /// the render width (the reference render's convention, e.g. an isotropic 1/256 pel -> 3x3),
+    /// plus the per-axis dash units. Offsets follow the sign of the logical pel. Callers stepping
+    /// a dash counter along a stroke use the unit for the stroke's dominant axis - TL80TB10's
+    /// venetian beams (a 255/256 x 1/256 pel swept a short way vertically) stamp the full-width
+    /// flat pel every |pel.Y| rows on the device, producing 3-on/3-off stripes, not a square stamp.
+    /// Returns (ox0, ox1, oy0, oy1, pelX, pelY).
     /// </summary>
-    internal (int ox0, int ox1, int oy0, int oy1, int pelMajor) GetDashPel(Size size)
+    internal (int ox0, int ox1, int oy0, int oy1, int pelX, int pelY) GetDashPel(Size size)
     {
         var lp = ((GeometricDrawingCommandBase)_baseCommand).LogicalPel;
-        int p = Math.Max(1, (int)MathF.Round(Math.Abs(lp.X) * size.Width, MidpointRounding.AwayFromZero));
-        int ox0 = lp.X >= 0 ? 0 : -p;
-        int ox1 = lp.X >= 0 ? p : 0;
-        int oy0 = lp.Y >= 0 ? -p : 0;
-        int oy1 = lp.Y >= 0 ? 0 : p;
-        return (ox0, ox1, oy0, oy1, p);
+        int px = Math.Max(1, (int)MathF.Round(Math.Abs(lp.X) * size.Width, MidpointRounding.AwayFromZero));
+        int py = Math.Max(1, (int)MathF.Round(Math.Abs(lp.Y) * size.Width, MidpointRounding.AwayFromZero));
+        int ox0 = lp.X >= 0 ? 0 : -px;
+        int ox1 = lp.X >= 0 ? px : 0;
+        int oy0 = lp.Y >= 0 ? -py : 0;
+        int oy1 = lp.Y >= 0 ? 0 : py;
+        return (ox0, ox1, oy0, oy1, px, py);
+    }
+
+    /// <summary>
+    /// The dash unit for a stroke: the dash-pel dimension along the stroke's dominant axis
+    /// (X for a mostly-horizontal stroke, Y for a mostly-vertical one). Isotropic pels are
+    /// unaffected; only anisotropic pels (the venetian-beam pattern) differ per axis.
+    /// </summary>
+    internal static int DashUnitForStroke(IReadOnlyList<SixLabors.ImageSharp.PointF> points, int pelX, int pelY)
+    {
+        float spanX = 0, spanY = 0;
+
+        for (var i = 0; i + 1 < points.Count; i++)
+        {
+            spanX += Math.Abs(points[i + 1].X - points[i].X);
+            spanY += Math.Abs(points[i + 1].Y - points[i].Y);
+        }
+
+        return spanX >= spanY ? pelX : pelY;
     }
 
     /// <summary>

@@ -76,6 +76,42 @@ public class DrawablePolygon : Drawable, IDrawable
             var (pFg, pBg) = ((FillableGeometricDrawingCommandBase)_command).GetColors(state);
 
             FillShape(image, polygonPoints.ToArray(), brush, GetFillSource(size, pFg, pBg));
+
+            // X3.110 5.3.3.4: a filled polygon's boundary is drawn with the logical pel and
+            // the interior filled - a centre-sampled fill alone leaves sliver shapes mostly
+            // unpainted (TL80TB10's wordmark-G miter wedge). Patterned (hatched/masked)
+            // fills keep their pattern to the edge - no solid boundary band (the MSZT
+            // striped background) - so only solid fills draw the boundary. A highlight
+            // outline, when requested, overpaints below.
+            if (_command.Texture.TexturePattern == NaplpsTexture.TexturePatterns.Solid)
+            {
+                if (Options.AuthenticGeometry && !Options.Antialias)
+                {
+                    // Device rasterization: sweep the pel along each edge exactly as lines
+                    // are drawn - anchored on the path, extending in the pel's sign
+                    // direction (the G wedge's closure diagonal stays bare on its left
+                    // while the up-right sweep bridges the cap to the serif stem).
+                    var boundaryColor = pFg.ToISColor();
+                    var (bdxMin, bdxMax, bdyMin, bdyMax) = GetPelOffsets(size);
+
+                    for (int i = 0; i < rawPoints.Count - 1; i++)
+                    {
+                        DrawableLine.PlotSweptPelLine(image, rawPoints[i], rawPoints[i + 1], bdxMin, bdxMax, bdyMin, bdyMax, boundaryColor);
+                    }
+
+                    if (rawPoints[^1] != rawPoints[0])
+                    {
+                        DrawableLine.PlotSweptPelLine(image, rawPoints[^1], rawPoints[0], bdxMin, bdxMax, bdyMin, bdyMax, boundaryColor);
+                    }
+                }
+                else
+                {
+                    // Standard rendering: same boundary rule in this path's own style - a
+                    // centre-sampled pel-width perimeter stroke in the drawing color.
+                    var boundaryPen = Pens.Solid(pFg.ToISColor(), GetPenWidthF(size));
+                    image.Mutate(x => x.Draw(fillOptions, boundaryPen, polygon));
+                }
+            }
         }
 
         image.Mutate(x =>

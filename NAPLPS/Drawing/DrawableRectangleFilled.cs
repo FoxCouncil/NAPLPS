@@ -44,7 +44,7 @@ public class DrawableRectangleFilled : Drawable, IDrawable
         int fx1 = x1, fy1 = y1, fx2 = x2, fy2 = y2;
         if (Options.AuthenticGeometry)
         {
-            var (ox0, ox1, oy0, oy1, _) = GetDashPel(size);
+            var (ox0, ox1, oy0, oy1, _, _) = GetDashPel(size);
             fx1 += ox0; fy1 += oy0; fx2 += ox1; fy2 += oy1;
         }
         var rect = new RectangularPolygon(new PointF(fx1, fy1), new PointF(fx2, fy2));

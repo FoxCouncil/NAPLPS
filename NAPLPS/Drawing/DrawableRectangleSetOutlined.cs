@@ -32,7 +32,7 @@ public class DrawableRectangleSetOutlined : Drawable, IDrawable
         {
             // Round-half-up pel (e.g. 1/256 -> 3px, matching the reference render's frame strokes), not the
             // truncated GetPelOffsets which yields 2px.
-            var (dxMin, dxMax, dyMin, dyMax, _) = GetDashPel(size);
+            var (dxMin, dxMax, dyMin, dyMax, _, _) = GetDashPel(size);
 
             for (int i = 0; i < vertices.Count - 1; i += 2)
             {

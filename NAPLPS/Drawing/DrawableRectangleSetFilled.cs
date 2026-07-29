@@ -47,7 +47,7 @@ public class DrawableRectangleSetFilled : Drawable, IDrawable
         int ex0 = 0, ex1 = 0, ey0 = 0, ey1 = 0;
         if (Options.AuthenticGeometry)
         {
-            var (ox0, ox1, oy0, oy1, _) = GetDashPel(size);
+            var (ox0, ox1, oy0, oy1, _, _) = GetDashPel(size);
             ex0 = ox0; ex1 = ox1; ey0 = oy0; ey1 = oy1;
         }
 
@@ -95,7 +95,7 @@ public class DrawableRectangleSetFilled : Drawable, IDrawable
             var color = GetOutlineColor();
             // Round-half-up pel (1/256 -> 3px) matching the reference render's frame strokes (e.g. the
             // MadMaze magenta highlight frame), not the truncated 2px GetPelOffsets.
-            var (dxMin, dxMax, dyMin, dyMax, _) = GetDashPel(size);
+            var (dxMin, dxMax, dyMin, dyMax, _, _) = GetDashPel(size);
 
             for (int i = 0; i < vertices.Count - 1; i += 2)
             {
