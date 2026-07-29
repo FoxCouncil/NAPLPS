@@ -1,4 +1,4 @@
-// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
+﻿// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
 using System.Text;
 
@@ -10,7 +10,12 @@ public static class Pages
     {
         var full = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-        File.WriteAllText(full, content, new UTF8Encoding(false));
+        // Markup gets laid out properly; xml, css and js are written as-is.
+        var text = relative.EndsWith(".html", StringComparison.OrdinalIgnoreCase)
+            ? Indenter.Apply(content)
+            : content;
+
+        File.WriteAllText(full, text, new UTF8Encoding(false));
     }
 
     public static void WriteGallery(string root, string baseUrl, List<RenderInfo> renders, List<CommitInfo> commits, string sha, DateTimeOffset at)
@@ -126,6 +131,7 @@ public static class Pages
             sb.Append(Html.Head($"{r.Title} — {Html.SiteName}", description, canonical, baseUrl, r.PosterAsset, 1, ld,
                 $"{r.Title}, {r.Collection}, {r.SystemType}, NAPLPS, videotex, retrocomputing"));
 
+            sb.AppendLine($"<!-- *licks* {Html.Encode(r.Title)}, YUM! -->");
             sb.AppendLine($"<nav class='crumb'><a href='../index.html'>Gallery</a> / <span>{Html.Encode(r.Collection)}</span> / <span>{Html.Encode(r.Title)}</span></nav>");
             sb.AppendLine($"<h1>{Html.Encode(r.Title)}</h1>");
             sb.AppendLine($"<p class='lede'>{Html.Encode(description)}</p>");

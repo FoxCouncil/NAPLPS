@@ -1,4 +1,4 @@
-// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
+﻿// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
 using System.Text;
 using System.Text.Json;
@@ -30,6 +30,7 @@ public static class Html
 
         var sb = new StringBuilder();
         sb.AppendLine("<!DOCTYPE html>");
+        sb.AppendLine("<!-- Woof, you're looking and found a foxie! -->");
         sb.AppendLine("<html lang='en'>");
         sb.AppendLine("<head>");
         sb.AppendLine("<meta charset='utf-8'>");
@@ -94,6 +95,7 @@ public static class Html
         sb.AppendLine($"<p>Rendered by the NAPLPS Toolbox at <code>{Encode(builtSha[..Math.Min(8, builtSha.Length)])}</code> on {builtAt:yyyy-MM-dd}. ");
         sb.AppendLine("Artwork is the property of its original authors; this corpus exists to verify the renderer.</p>");
         sb.AppendLine("</footer>");
+        sb.AppendLine("<!-- Yip, Fox loves you! -->");
         sb.AppendLine("</body></html>");
 
         return sb.ToString();

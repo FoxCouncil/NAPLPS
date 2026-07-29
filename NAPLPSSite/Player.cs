@@ -1,4 +1,4 @@
-// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
+﻿// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
 namespace NAPLPSSite;
 
@@ -26,6 +26,8 @@ public static class Player
     public static string Script => """
         (function () {
           'use strict';
+
+          console.log("Yip! I'm a foxie!");
 
           const CRC = (function () {
             const t = new Uint32Array(256);
