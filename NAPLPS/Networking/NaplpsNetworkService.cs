@@ -1,4 +1,4 @@
-// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
+﻿// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
 using System.Net;
 using System.Net.Sockets;
@@ -12,23 +12,17 @@ namespace NAPLPS.Networking;
 /// remote NAPLPS endpoint. NAPLPS was originally designed for videotex terminals over
 /// serial / dial-up; this lets the editor act as either a transmitter (push the current
 /// document to a viewer) or a receiver (accept a streamed scene and render incrementally).
+///
+/// TCP is unavailable in a browser, which can neither open a raw socket nor listen on a port. Heads
+/// that cannot use this one use <see cref="NaplpsWebSocketClient"/> instead; both derive from
+/// <see cref="NaplpsEndpoint"/> so the buffering and events a consumer sees are identical.
 /// </summary>
-public class NaplpsNetworkService : IDisposable
+public class NaplpsNetworkService : NaplpsEndpoint
 {
     private TcpListener? _listener;
     private CancellationTokenSource? _listenerCts;
     private Task? _listenerTask;
-    private readonly object _bufferLock = new();
-    private readonly List<byte> _receiveBuffer = new();
-
     public bool IsListening => _listener != null;
-
-    /// <summary>Fired (on a worker thread) whenever bytes arrive from a connected sender.
-    /// Subscribers should marshal back to the UI thread before touching VM state.</summary>
-    public event System.Action<byte[]>? BytesReceived;
-
-    /// <summary>Fired when a client connects/disconnects. Argument is a human-readable status.</summary>
-    public event System.Action<string>? StatusChanged;
 
     /// <summary>
     /// Begin listening for incoming NAPLPS streams on <paramref name="port"/>. Idempotent —
@@ -43,7 +37,7 @@ public class NaplpsNetworkService : IDisposable
         _listenerCts = new CancellationTokenSource();
         _listener.Start();
 
-        StatusChanged?.Invoke($"Listening on port {port}");
+        RaiseStatus($"Listening on port {port}");
         _listenerTask = Task.Run(() => AcceptLoopAsync(_listenerCts.Token));
     }
 
@@ -59,7 +53,7 @@ public class NaplpsNetworkService : IDisposable
         _listener = null;
         _listenerCts = null;
         _listenerTask = null;
-        StatusChanged?.Invoke("Stopped");
+        RaiseStatus("Stopped");
     }
 
     private async Task AcceptLoopAsync(CancellationToken ct)
@@ -75,7 +69,7 @@ public class NaplpsNetworkService : IDisposable
                 client = await _listener.AcceptTcpClientAsync(ct);
             }
             catch (OperationCanceledException) { return; }
-            catch (System.Exception ex) { StatusChanged?.Invoke($"Accept error: {ex.Message}"); return; }
+            catch (System.Exception ex) { RaiseStatus($"Accept error: {ex.Message}"); return; }
 
             // Each client gets its own background read loop. Multiple concurrent senders
             // would interleave bytes — fine for stress test, weird for real use; the editor
@@ -87,7 +81,7 @@ public class NaplpsNetworkService : IDisposable
     private async Task ReadClientAsync(TcpClient client, CancellationToken ct)
     {
         var endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
-        StatusChanged?.Invoke($"Client connected: {endpoint}");
+        RaiseStatus($"Client connected: {endpoint}");
 
         try
         {
@@ -103,38 +97,16 @@ public class NaplpsNetworkService : IDisposable
                     var chunk = new byte[n];
                     System.Array.Copy(buf, chunk, n);
 
-                    lock (_bufferLock)
-                    {
-                        _receiveBuffer.AddRange(chunk);
-                    }
-
-                    BytesReceived?.Invoke(chunk);
+                    Receive(chunk);
                 }
             }
         }
         catch (System.Exception ex)
         {
-            StatusChanged?.Invoke($"Read error: {ex.Message}");
+            RaiseStatus($"Read error: {ex.Message}");
         }
 
-        StatusChanged?.Invoke($"Client disconnected: {endpoint}");
-    }
-
-    /// <summary>Snapshot the bytes received so far (for parsing into a NaplpsFormat).</summary>
-    public byte[] SnapshotReceivedBuffer()
-    {
-        lock (_bufferLock)
-        {
-            return _receiveBuffer.ToArray();
-        }
-    }
-
-    public void ClearReceivedBuffer()
-    {
-        lock (_bufferLock)
-        {
-            _receiveBuffer.Clear();
-        }
+        RaiseStatus($"Client disconnected: {endpoint}");
     }
 
     /// <summary>
@@ -150,8 +122,9 @@ public class NaplpsNetworkService : IDisposable
         await stream.FlushAsync(ct);
     }
 
-    public void Dispose()
+    public override void Dispose()
     {
         StopListening();
+        base.Dispose();
     }
 }
