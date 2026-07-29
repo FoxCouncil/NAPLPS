@@ -48,7 +48,9 @@ public class FileLoadingTests
         Assert.IsTrue(file.Is7Bit);
         Assert.AreEqual(NaplpsSystemType.NAPLPS, file.SystemType);
 
-        Assert.AreEqual(1662, file.Commands.Count);
+        // 1662 -> 1665 when ESC-coded DEF TEXTURE started buffering its mask bodies: each
+        // definition serializes as raw body bytes plus an explicit END sequence.
+        Assert.AreEqual(1665, file.Commands.Count);
     }
 
     [TestMethod]
@@ -83,7 +85,9 @@ public class FileLoadingTests
         Assert.IsTrue(file.Is7Bit);
         Assert.AreEqual(NaplpsSystemType.NAPLPS, file.SystemType);
 
-        Assert.AreEqual(1475, file.Commands.Count);
+        // 1475 -> 1485 when ESC-coded DEF TEXTURE started buffering its mask bodies (see
+        // LoadGirl).
+        Assert.AreEqual(1485, file.Commands.Count);
     }
 
     [TestMethod]

@@ -683,7 +683,15 @@ public partial class NaplpsFormat
         // Texture definition mode
         if (State.TextureBeingDefined != null)
         {
-            if (IsEndCommand(opcode))
+            // Like macros, a 7-bit stream terminates the definition with the ESC-coded END
+            // (ESC 4/5); consume the trailing final byte so it is not buffered as body.
+            bool textureEscEnd = IsEscEnd(opcode, reader);
+            if (textureEscEnd)
+            {
+                reader.ReadByte();
+            }
+
+            if (textureEscEnd || IsEndCommand(opcode))
             {
                 ParseTextureData(State.TextureBeingDefined.Value, State.TextureBuffer);
                 State.TextureBeingDefined = null;
@@ -694,7 +702,7 @@ public partial class NaplpsFormat
                 }
 
                 State.TextureBuffer.Clear();
-                commands.Add(new NaplpsSequence(State.Clone(), new ControlCommand(NaplpsControlCommands.End, State, opcode, [])));
+                commands.Add(new NaplpsSequence(State.Clone(), MakeEndCommand(opcode, textureEscEnd)));
             }
             else
             {
@@ -844,12 +852,31 @@ public partial class NaplpsFormat
                             StartMacroDefinition(new NaplpsOperands(new byte[] { nameByte }), macroType);
                         }
                     }
-                    // DefDRCS/DefTexture/End via ESC keep their prior handling (DRCS/Texture are
-                    // not yet buffered via ESC; End is consumed inside the macro buffer).
+                    // 7-bit DEF TEXTURE (6.2.4): the byte after the control selects mask A-D
+                    // (4/1..4/4); out of range makes the whole command a null operation. The
+                    // body is captured until END. Previously the selector byte dangled as an
+                    // unknown opcode and the mask body (DOMAIN, the INCREMENTAL POINT tile,
+                    // CLEAR...) executed as LIVE drawing commands on the picture.
+                    else if (c1Command == DefTexture)
+                    {
+                        if (!reader.IsEOF())
+                        {
+                            byte maskSelector = reader.ReadByte();
+                            additionalParameters.Add(maskSelector); // keep for byte-exact round-trip
+
+                            if (maskSelector >= 0x41 && maskSelector <= 0x44)
+                            {
+                                State.TextureBeingDefined = maskSelector;
+                                State.TextureBuffer.Clear();
+                            }
+                        }
+                    }
+                    // DefDRCS/End via ESC keep their prior handling (DRCS is not yet buffered
+                    // via ESC; End is consumed inside the definition buffers).
                     // Pass the OUTER additionalParameters into the recursive call so that
                     // operand-consuming C1 commands (e.g. Repeat reads a count byte) append
                     // their bytes to the outer ESC command's operands, preserving byte fidelity.
-                    else if (c1Command != DefDRCS && c1Command != DefTexture && c1Command != End)
+                    else if (c1Command != DefDRCS && c1Command != End)
                     {
                         HandleControlCommand(c1Command, reader, additionalParameters, commands);
                     }
