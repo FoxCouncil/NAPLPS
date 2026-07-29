@@ -50,8 +50,9 @@ public static class Pages
 
             foreach (var r in group.OrderBy(r => r.Title, StringComparer.OrdinalIgnoreCase))
             {
-                sb.AppendLine($"<a class='card' href='r/{r.Slug}.html' data-name='{Html.Encode((r.Title + " " + r.Collection).ToLowerInvariant())}'>");
-                // Thumbnails are stills: 372 animated APNGs on one page would be brutal.
+                sb.AppendLine($"<a class='card' href='r/{r.Slug}.html' data-name='{Html.Encode((r.Title + " " + r.Collection).ToLowerInvariant())}' data-apng='{r.ApngAsset}'>");
+                // Stills by default - 372 animated APNGs loading at once would be brutal. The full
+                // render is swapped in on hover, so the animation is paid for only when wanted.
                 sb.AppendLine($"<img src='{r.ThumbAsset}' width='320' height='240' loading='lazy' decoding='async' alt='{Html.Encode(r.Title)} rendered'>");
                 sb.AppendLine($"<span class='name'>{Html.Encode(r.Title)}</span>");
                 sb.AppendLine($"<span class='meta'>{r.FrameCount:N0} frames &middot; {Html.Encode(r.SystemType)}</span>");
@@ -76,6 +77,36 @@ public static class Pages
                 grid.style.display = any ? '' : 'none';
               });
             }
+
+            // Swap the still for the full animation while pointing at a card. Deliberately loaded
+            // on demand rather than up front: the whole corpus is ~31MB of APNG and the grid holds
+            // 372 of them. Reassigning src restarts the animation, so each hover plays from frame 0.
+            (function () {
+              if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+              document.querySelectorAll('.card').forEach(card => {
+                const img = card.querySelector('img');
+                const still = img.getAttribute('src');
+                const anim = card.dataset.apng;
+                if (!anim) return;
+
+                let pending;
+                const play = () => {
+                  // Small delay so sweeping the pointer across the grid does not fetch everything.
+                  pending = setTimeout(() => { img.src = anim; card.classList.add('playing'); }, 120);
+                };
+                const stop = () => {
+                  clearTimeout(pending);
+                  if (img.getAttribute('src') !== still) { img.src = still; }
+                  card.classList.remove('playing');
+                };
+
+                card.addEventListener('mouseenter', play);
+                card.addEventListener('mouseleave', stop);
+                card.addEventListener('focus', play);
+                card.addEventListener('blur', stop);
+              });
+            })();
             </script>
             """);
 
@@ -99,10 +130,30 @@ public static class Pages
             sb.AppendLine($"<h1>{Html.Encode(r.Title)}</h1>");
             sb.AppendLine($"<p class='lede'>{Html.Encode(description)}</p>");
 
-            // The browser animates the APNG natively - no frame extraction, no player script.
-            sb.AppendLine("<figure class='stage'>");
-            sb.AppendLine($"<img src='../{r.ApngAsset}' width='{r.Width}' height='{r.Height}' alt='{Html.Encode(r.Title)} animated render'>");
-            sb.AppendLine($"<figcaption>Plays natively as an animated PNG &middot; {Html.Bytes(r.ApngBytes)}</figcaption>");
+            // Canvas-based player so the drawing sequence can be scrubbed. The <img> underneath is
+            // the fallback: without JavaScript, or if decoding fails, the browser still animates
+            // the APNG on its own - just without transport controls.
+            sb.AppendLine($"<figure class='stage player' data-src='../{r.ApngAsset}'>");
+            sb.AppendLine($"<canvas width='{r.Width}' height='{r.Height}' aria-label='{Html.Encode(r.Title)} render'></canvas>");
+            sb.AppendLine($"<noscript><img src='../{r.ApngAsset}' width='{r.Width}' height='{r.Height}' alt='{Html.Encode(r.Title)} animated render'></noscript>");
+            sb.AppendLine($"<img class='p-fallback' hidden src='../{r.ApngAsset}' width='{r.Width}' height='{r.Height}' alt='{Html.Encode(r.Title)} animated render'>");
+
+            sb.AppendLine("<div class='transport'>");
+            sb.AppendLine("<button class='p-start' type='button' disabled title='Home' aria-label='First frame'>&#124;&laquo;</button>");
+            sb.AppendLine("<button class='p-prev' type='button' disabled title='Left arrow' aria-label='Previous frame'>&laquo;</button>");
+            sb.AppendLine("<button class='p-play' type='button' disabled title='Space'>&#9205; Play</button>");
+            sb.AppendLine("<button class='p-next' type='button' disabled title='Right arrow' aria-label='Next frame'>&raquo;</button>");
+            sb.AppendLine("<button class='p-end' type='button' disabled title='End' aria-label='Last frame'>&raquo;&#124;</button>");
+            sb.AppendLine($"<input class='p-scrub' type='range' min='0' max='{Math.Max(0, r.FrameCount - 1)}' value='0' step='1' disabled aria-label='Scrub frames'>");
+            sb.AppendLine("<select class='p-rate' disabled aria-label='Playback rate'>");
+            sb.AppendLine("<option value='0.25'>0.25x</option><option value='0.5'>0.5x</option><option value='1' selected>1x</option>");
+            sb.AppendLine("<option value='2'>2x</option><option value='4'>4x</option><option value='8'>8x</option>");
+            sb.AppendLine("</select>");
+            sb.AppendLine("<span class='p-frame'>&mdash;</span>");
+            sb.AppendLine("<span class='p-time'></span>");
+            sb.AppendLine("</div>");
+
+            sb.AppendLine($"<figcaption>Animated PNG &middot; {r.FrameCount:N0} frames &middot; {Html.Bytes(r.ApngBytes)} &middot; space to play/pause, arrows to step</figcaption>");
             sb.AppendLine("</figure>");
 
             sb.AppendLine("<table class='facts'>");
@@ -118,10 +169,11 @@ public static class Pages
 
             sb.AppendLine("<p class='links'>");
             sb.AppendLine($"<a href='../{r.ApngAsset}' download='{Html.Encode(r.Title)}.apng'>Download APNG</a>");
-            sb.AppendLine($"<a href='../{r.PosterAsset}'>First frame PNG</a>");
+            sb.AppendLine($"<a href='../{r.PosterAsset}'>Poster frame PNG</a>");
             sb.AppendLine($"<a href='https://github.com/FoxCouncil/NAPLPS/blob/main/Examples/{Uri.EscapeDataString(r.SourceRelative).Replace("%2F", "/")}'>Source file</a>");
             sb.AppendLine("</p>");
 
+            sb.AppendLine($"<script src='../{Player.FileName}' defer></script>");
             sb.Append(Html.Foot(sha, at));
             Write(root, canonical, sb.ToString());
         }
@@ -301,6 +353,11 @@ public static class Pages
         Write(root, "feed.xml", sb.ToString());
     }
 
+    public static void WritePlayer(string root)
+    {
+        Write(root, Player.FileName, Player.Script);
+    }
+
     public static void WriteStyle(string root)
     {
         Write(root, "style.css", """
@@ -325,13 +382,25 @@ public static class Pages
             .filter:focus { outline: none; border-color: #58a6ff; }
             .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
             .card { display: block; background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; transition: border-color .12s; }
-            .card:hover { border-color: #58a6ff; text-decoration: none; }
+            .card:hover, .card:focus { border-color: #58a6ff; text-decoration: none; outline: none; }
+            .card.playing { border-color: #58a6ff; }
+            .card.playing .name { color: #58a6ff; }
             .card img { display: block; width: 100%; height: auto; background: #000; image-rendering: pixelated; }
             .card .name { display: block; padding: 8px 10px 0; color: #f0f6fc; font-size: 14px; word-break: break-all; }
             .card .meta { display: block; padding: 2px 10px 9px; color: #8b949e; font-size: 12px; }
             .stage { margin: 0 0 22px; }
             .stage img { max-width: 100%; height: auto; border: 1px solid #30363d; border-radius: 8px; background: #000; image-rendering: pixelated; }
             .stage figcaption { color: #8b949e; font-size: 13px; margin-top: 8px; }
+            .stage canvas { max-width: 100%; height: auto; border: 1px solid #30363d; border-radius: 8px; background: #000; image-rendering: pixelated; display: block; }
+            .stage.failed canvas { display: none; }
+            .transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; padding: 9px 11px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+            .transport button, .transport select { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 13px; }
+            .transport button:hover:not(:disabled), .transport select:hover:not(:disabled) { border-color: #58a6ff; }
+            .transport button:disabled, .transport select:disabled { opacity: .45; cursor: default; }
+            .transport .p-play { min-width: 88px; font-weight: 600; }
+            .transport .p-scrub { flex: 1; min-width: 160px; accent-color: #58a6ff; }
+            .transport .p-frame { color: #f0f6fc; font-size: 13px; min-width: 150px; text-align: right; font-variant-numeric: tabular-nums; }
+            .transport .p-time { color: #8b949e; font-size: 13px; min-width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
             .facts { border-collapse: collapse; margin-bottom: 20px; }
             .facts th { text-align: left; color: #8b949e; font-weight: 400; padding: 5px 22px 5px 0; vertical-align: top; white-space: nowrap; }
             .facts td { padding: 5px 0; color: #f0f6fc; word-break: break-all; }

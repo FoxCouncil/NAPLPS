@@ -44,11 +44,20 @@ public sealed class Assets(string outputRoot)
     }
 
     /// <summary>
-    /// First composited frame of an APNG as PNG bytes, at native size and as a thumbnail. Used for
-    /// the gallery grid and for og:image - social crawlers and search engines will not animate an
-    /// APNG, so a still is what actually shows up in a preview card.
+    /// A representative composited frame of an APNG as PNG bytes, at native size and as a
+    /// thumbnail. Used for the gallery grid and for og:image - social crawlers and search engines
+    /// will not animate an APNG, so a still is what actually shows up in a preview card.
+    ///
+    /// These animations are drawing sequences, so the LAST frame is the finished artwork and is
+    /// what should represent the file - the first frame is whatever the first command painted, which
+    /// on most of the corpus is a nearly blank canvas.
+    ///
+    /// The exception is a sequence that clears, scrolls away or fades at the end, where the final
+    /// frame is empty and would make a useless thumbnail. So the final frame is used unless it
+    /// holds substantially less ink than the animation's fullest frame, in which case the fullest
+    /// frame wins.
     /// </summary>
-    public static (byte[] Poster, byte[] Thumb, int Width, int Height, uint Frames) FirstFrame(byte[] apngBytes)
+    public static (byte[] Poster, byte[] Thumb, int Width, int Height, uint Frames) RepresentativeFrame(byte[] apngBytes)
     {
         using var input = new MemoryStream(apngBytes);
         using var reader = new ApngReader(input, leaveOpen: true);
@@ -60,7 +69,28 @@ public sealed class Assets(string outputRoot)
             throw new InvalidDataException("APNG contained no frames");
         }
 
-        using var image = Image.LoadPixelData<Rgba32>(pixels, reader.Width, reader.Height);
+        var last = (byte[])pixels.Clone();
+        var fullest = (byte[])pixels.Clone();
+        long lastInk = Ink(pixels);
+        long fullestInk = lastInk;
+
+        while (reader.TryReadFrame(pixels))
+        {
+            lastInk = Ink(pixels);
+            pixels.CopyTo(last.AsSpan());
+
+            if (lastInk > fullestInk)
+            {
+                fullestInk = lastInk;
+                pixels.CopyTo(fullest.AsSpan());
+            }
+        }
+
+        // A final frame holding less than 60% of the peak ink means the sequence ended on a clear
+        // or a transition rather than on the finished picture.
+        var chosen = fullestInk > 0 && lastInk < fullestInk * 0.6 ? fullest : last;
+
+        using var image = Image.LoadPixelData<Rgba32>(chosen, reader.Width, reader.Height);
 
         using var posterStream = new MemoryStream();
         image.SaveAsPng(posterStream);
@@ -70,6 +100,26 @@ public sealed class Assets(string outputRoot)
         thumb.SaveAsPng(thumbStream);
 
         return (posterStream.ToArray(), thumbStream.ToArray(), reader.Width, reader.Height, reader.FrameCount);
+    }
+
+    /// <summary>
+    /// How much of the canvas is drawn on: opaque pixels that are not near-black. The corpus is
+    /// overwhelmingly artwork on a black or transparent field, so this separates "the picture is
+    /// here" from "the screen has been cleared".
+    /// </summary>
+    private static long Ink(ReadOnlySpan<byte> pixels)
+    {
+        long n = 0;
+
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i + 3] > 0 && (pixels[i] > 8 || pixels[i + 1] > 8 || pixels[i + 2] > 8))
+            {
+                n++;
+            }
+        }
+
+        return n;
     }
 
     /// <summary>

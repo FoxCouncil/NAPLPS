@@ -62,7 +62,7 @@ foreach (var file in Directory.GetFiles(baselinesDir, "*.apng", SearchOption.All
 
     try
     {
-        (poster, thumb, w, h, frames) = Assets.FirstFrame(bytes);
+        (poster, thumb, w, h, frames) = Assets.RepresentativeFrame(bytes);
     }
     catch (Exception ex)
     {
@@ -192,6 +192,7 @@ foreach (var commit in git.CommitsTouching(BaselinesRepoPath, history))
 // ---------------------------------------------------------------- emit
 
 Pages.WriteStyle(outDir);
+Pages.WritePlayer(outDir);
 Pages.WriteGallery(outDir, baseUrl, renders, commits, builtSha, builtAt);
 Pages.WriteRenderPages(outDir, baseUrl, renders, builtSha, builtAt);
 Pages.WriteChangeIndex(outDir, baseUrl, commits, builtSha, builtAt);
