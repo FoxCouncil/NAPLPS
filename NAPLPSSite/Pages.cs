@@ -145,6 +145,7 @@ public static class Pages
             sb.AppendLine("<button class='p-next' type='button' disabled title='Right arrow' aria-label='Next frame'>&raquo;</button>");
             sb.AppendLine("<button class='p-end' type='button' disabled title='End' aria-label='Last frame'>&raquo;&#124;</button>");
             sb.AppendLine($"<input class='p-scrub' type='range' min='0' max='{Math.Max(0, r.FrameCount - 1)}' value='0' step='1' disabled aria-label='Scrub frames'>");
+            sb.AppendLine("<button class='p-loop' type='button' disabled aria-pressed='false' title='Play once'>&#8635; Loop</button>");
             sb.AppendLine("<select class='p-rate' disabled aria-label='Playback rate'>");
             sb.AppendLine("<option value='0.25'>0.25x</option><option value='0.5'>0.5x</option><option value='1' selected>1x</option>");
             sb.AppendLine("<option value='2'>2x</option><option value='4'>4x</option><option value='8'>8x</option>");
@@ -398,6 +399,7 @@ public static class Pages
             .transport button:hover:not(:disabled), .transport select:hover:not(:disabled) { border-color: #58a6ff; }
             .transport button:disabled, .transport select:disabled { opacity: .45; cursor: default; }
             .transport .p-play { min-width: 88px; font-weight: 600; }
+            .transport .p-loop.on { background: #1f6feb; border-color: #1f6feb; color: #fff; }
             .transport .p-scrub { flex: 1; min-width: 160px; accent-color: #58a6ff; }
             .transport .p-frame { color: #f0f6fc; font-size: 13px; min-width: 150px; text-align: right; font-variant-numeric: tabular-nums; }
             .transport .p-time { color: #8b949e; font-size: 13px; min-width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
