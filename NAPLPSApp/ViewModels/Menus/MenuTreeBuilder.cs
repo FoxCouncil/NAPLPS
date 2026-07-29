@@ -1,4 +1,4 @@
-// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
+﻿// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
 using NAPLPSApp.Resources;
 
@@ -155,24 +155,9 @@ public static class MenuTreeBuilder
 
     private static MenuNode BuildSpeedMenu(MainWindowViewModel vm)
     {
-        (string label, uint rate)[] rates =
-        [
-            ("Fastest",   0),
-            ("460Kbps",   460800),
-            ("230Kbps",   230400),
-            ("115Kbps",   115200),
-            ("56Kbps",    57600),
-            ("38.4Kbps",  38400),
-            ("33.6Kbps",  33600),
-            ("28.8Kbps",  28800),
-            ("19.2Kbps",  19200),
-            ("14.4Kbps",  14400),
-            ("9.6Kbps",   9600),
-            ("2.4Kbps",   2400),
-            ("1.2Kbps",   1200),
-            ("300bps",    300),
-            ("110bps",    110)
-        ];
+        // The canonical rate list lives in the library so the menu, the export dialog, the CLI
+        // and the corpus site cannot drift apart.
+        var rates = NAPLPS.NaplpsBaud.Rates.Select(r => (label: NAPLPS.NaplpsBaud.Describe(r), rate: (uint)r)).ToArray();
 
         return new MenuNode
         {

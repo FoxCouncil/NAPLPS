@@ -1,4 +1,4 @@
-namespace NAPLPSApp.ViewModels;
+﻿namespace NAPLPSApp.ViewModels;
 
 public enum ExportFormat
 {
@@ -60,9 +60,22 @@ public partial class ExportDialogViewModel : ObservableObject
 
     public bool CanSetJpegQuality => Format == ExportFormat.Jpeg;
 
-    /// <summary>APNG: base frame delay in milliseconds (DrawContext.RenderToApng takes hundredths of a second).</summary>
+    /// <summary>
+    /// APNG: the line speed the exported animation is paced at, so it draws the way the picture
+    /// would have arrived. Shares its rate list with the editor's Speed menu and the CLI.
+    /// </summary>
     [ObservableProperty]
-    private int apngFrameDelayMs = 50;
+    private int apngBaudRate = NAPLPS.NaplpsBaud.Default;
+
+    /// <summary>Selectable draw speeds, for the dialog's dropdown.</summary>
+    public IReadOnlyList<BaudChoice> ApngBaudChoices { get; } =
+        [.. NAPLPS.NaplpsBaud.Rates.Select(r => new BaudChoice(r, NAPLPS.NaplpsBaud.Describe(r)))];
+
+    /// <summary>A selectable line speed. Record so the ComboBox can match on value.</summary>
+    public sealed record BaudChoice(int Rate, string Label)
+    {
+        public override string ToString() => Label;
+    }
 
     /// <summary>APNG: loop forever vs. play once.</summary>
     [ObservableProperty]

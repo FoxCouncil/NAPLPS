@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 		xmlns:vm="using:NAPLPSApp.ViewModels"
 		xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -66,8 +66,12 @@
 			<StackPanel Spacing="6" IsVisible="{Binding IsApng}">
 				<TextBlock Text="APNG Options" FontWeight="Bold"/>
 				<Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
-					<TextBlock Grid.Row="0" Grid.Column="0" Text="Frame delay (ms):" VerticalAlignment="Center"/>
-					<NumericUpDown Grid.Row="0" Grid.Column="1" Value="{Binding ApngFrameDelayMs}" Minimum="10" Maximum="5000" Increment="10" FormatString="0"/>
+					<TextBlock Grid.Row="0" Grid.Column="0" Text="Draw speed:" VerticalAlignment="Center"
+							   ToolTip.Tip="Paces the animation as if the picture were arriving down a line at this speed, the way NAPLPS was drawn"/>
+					<ComboBox Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch"
+							  ItemsSource="{Binding ApngBaudChoices}"
+							  SelectedValue="{Binding ApngBaudRate}"
+							  SelectedValueBinding="{Binding Rate}"/>
 
 					<TextBlock Grid.Row="1" Grid.Column="0" Text="Blink cycles:" VerticalAlignment="Center" ToolTip.Tip="Number of additional blink-animation cycles to append after the draw sequence (0 = none)"/>
 					<NumericUpDown Grid.Row="1" Grid.Column="1" Value="{Binding ApngBlinkCycles}" Minimum="0" Maximum="100" Increment="1" FormatString="0"/>

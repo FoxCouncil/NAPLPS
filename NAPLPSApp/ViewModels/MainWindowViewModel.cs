@@ -62,15 +62,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(BaudRateDisplay))]
-    private uint baudRate = 2400;
+    private uint baudRate = NAPLPS.NaplpsBaud.Default;
 
-    public string BaudRateDisplay => BaudRate switch
-    {
-        0 => "Fastest",
-        >= 1000000 => $"{BaudRate / 1000000.0:0.#}Mbps",
-        >= 1000 => $"{BaudRate / 1000.0:0.#}Kbps",
-        _ => $"{BaudRate}bps"
-    };
+    public string BaudRateDisplay => NAPLPS.NaplpsBaud.Describe((int)BaudRate);
 
     [ObservableProperty]
     private int totalFrames;
@@ -1007,11 +1001,10 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         // live canvas.
         if (vm.Format == ExportFormat.Apng)
         {
-            int delayHundredths = System.Math.Max(1, vm.ApngFrameDelayMs / 10);
+            drawContext.BaudRate = vm.ApngBaudRate;
 
-            // The dialog offers an explicit frame delay, so honour it rather than the baud pacing
-            // DrawContext defaults to - otherwise the control would sit there doing nothing.
-            drawContext.BaudRate = 0;
+            // Only consulted when the dialog's draw speed is Fastest.
+            const int delayHundredths = 5;
 
             // Streams straight to the file: frame range and scale are applied as each frame is
             // produced, so a multi-thousand-frame export no longer has to fit in memory first.
@@ -2818,12 +2811,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
             if (IsAnimated)
             {
-                uint delayInMilliseconds = (uint)(BaudRate == 0 ? 0 : (loadedFile.Commands.Count * 8 * 1000.0 / BaudRate));
+                // The renderer paces itself from each command's byte length; this only supplies
+                // the flat fallback used when the Speed menu is set to Fastest.
+                drawContext.BaudRate = (int)BaudRate;
 
-                if (delayInMilliseconds == 0)
-                {
-                    delayInMilliseconds = 16;
-                }
+                // "Fastest" still needs a beat between commands so the canvas can repaint.
+                uint delayInMilliseconds = 16;
 
                 do
                 {

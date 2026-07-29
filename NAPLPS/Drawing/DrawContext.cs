@@ -93,11 +93,11 @@ public class DrawContext : IDisposable
     /// arrived down a videotex link, so a frame's time on screen is the transmission time of the
     /// commands it represents - 10 bits per byte, being 8N1 framing.
     ///
-    /// 1200 is the common videotex rate and what Prodigy subscribers mostly saw. Set to 0 to fall
-    /// back to a flat per-frame delay, which paces by frame count instead and is wrong by anything
-    /// up to 30x depending on how much of a file coalesces into identical frames.
+    /// See <see cref="NaplpsBaud"/> for the shared rate list. Set to <see cref="NaplpsBaud.Fastest"/>
+    /// to fall back to a flat per-frame delay, which paces by frame count instead and is wrong by
+    /// anything up to 30x depending on how much of a file coalesces into identical frames.
     /// </summary>
-    public int BaudRate { get; set; } = 1200;
+    public int BaudRate { get; set; } = NaplpsBaud.Default;
 
     public DrawContext() { }
 
@@ -172,6 +172,12 @@ public class DrawContext : IDisposable
         OnImageUpdated?.Invoke();
     }
 
+    /// <summary>
+    /// Draws command by command with a pause between each, so the picture appears the way a
+    /// videotex terminal built it. When <see cref="BaudRate"/> is set each command waits for as
+    /// long as its own bytes would have taken to arrive; <paramref name="delay"/> is the flat
+    /// per-command fallback used when pacing is off.
+    /// </summary>
     public async Task RenderAsync(CancellationToken cancellationToken, uint delay)
     {
         BeginRender();
@@ -194,7 +200,17 @@ public class DrawContext : IDisposable
             }
             else if (drawable != null)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(delay), cancellationToken);
+                // 10 bits per byte (8N1). Paced per command from its own length - deriving one
+                // delay for the whole file and applying it to every command makes the draw time
+                // grow with the SQUARE of the command count.
+                double ms = BaudRate > 0
+                    ? NaplpsBaud.MillisecondsFor(sequence.CodedByteLength, BaudRate)
+                    : delay;
+
+                if (ms >= 1)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(ms), cancellationToken);
+                }
             }
         }
 
@@ -788,8 +804,7 @@ public class DrawContext : IDisposable
     /// <summary>Transmission time of <paramref name="bytes"/>, in hundredths of a second.</summary>
     private int BaudDelayHundredths(int bytes)
     {
-        // 10 bits per byte (8N1). hundredths = bytes * 10 / baud * 100.
-        return Math.Max(1, (int)Math.Round(bytes * 1000.0 / BaudRate));
+        return Math.Max(1, (int)Math.Round(NaplpsBaud.MillisecondsFor(bytes, BaudRate) / 10.0));
     }
 
     private void RenderFrameSequence(int delayHundredths, Action<Image<Rgba32>, int> emitFrame)
@@ -860,7 +875,7 @@ public class DrawContext : IDisposable
                 // PP3 doesn't parse WAIT timing — short fixed delay for CLUT animation frames.
                 // 150ms ≈ 15 hundredths, expressed as bytes so baud pacing honours it too.
                 currentFrameDelayMultiplier = Math.Max(1, 15 / delayHundredths);
-                currentFrameBytes = BaudRate > 0 ? (int)Math.Round(BaudRate * 0.15 / 10) : 0;
+                currentFrameBytes = BaudRate > 0 ? (int)Math.Round(BaudRate * 0.15 / NaplpsBaud.BitsPerByte) : 0;
             }
             // Only check for frame changes when something was actually drawn
             else if (drawable != null)

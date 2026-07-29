@@ -360,7 +360,7 @@ sealed class Program
         var paletteAnim = false;
         var paletteFrames = 120;
         var delay = 5;
-        var baud = 1200;
+        var baud = NAPLPS.NaplpsBaud.Default;
         string? atFrames = null;
         var blinkCycles = 0;
         var gunWidthSet = false;
