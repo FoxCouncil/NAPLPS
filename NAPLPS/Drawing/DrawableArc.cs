@@ -65,8 +65,16 @@ public class DrawableArc : Drawable, IDrawable
 
             var circleCmd = (FillableGeometricDrawingCommandBase)_command;
             var (circFg, circBg) = circleCmd.GetColors(_command.State ?? new NaplpsState());
-            var circleColor = (circleCmd.ShouldFill ? circBg : circFg).ToISColor();
             bool wantCircleOutline = !_command.ShouldFill || _command.Texture.ShouldHighlight;
+
+            // Highlight is a FILL attribute (same rules the arc branch got from #46/#47): only a
+            // FILLED circle's highlight outline is forced solid, and that outline is black in
+            // color modes 0/1 and the background color in mode 2. An unfilled circle has no area
+            // to highlight, so its stroke keeps the current line texture and foreground color.
+            bool highlightCircleOutline = _command.ShouldFill && _command.Texture.ShouldHighlight;
+            var circleColor = highlightCircleOutline
+                ? (circleCmd.ColorMode == 2 ? circBg : Color.Black).ToISColor()
+                : (circleCmd.ShouldFill ? circBg : circFg).ToISColor();
             // Any hard-edged outline uses the integer pel plotter, not only authentic mode's:
             // ImageSharp's non-antialiased stroke is not portable across architectures (issue #45).
             bool authenticCircle = !Options.Antialias && wantCircleOutline;
@@ -80,9 +88,22 @@ public class DrawableArc : Drawable, IDrawable
             {
                 if (wantCircleOutline && !authenticCircle)
                 {
-                    // Use centered round pen for circle outlines (symmetric)
+                    // Anti-aliased preview path; same pen rules as the arc branch - a filled
+                    // circle's highlight outline is solid, everything else takes the texture.
                     float outlineWidth = GetPenWidth(size);
-                    x.Draw(FillOptions(), Pens.Solid(circleColor, outlineWidth), circle);
+                    var outlinePen = highlightCircleOutline
+                        ? Pens.Solid(circleColor, outlineWidth)
+                        : GetTexturedPen(circleColor, outlineWidth);
+                    var gapColor = highlightCircleOutline || _command.Texture.LineTexture == NaplpsTexture.LineTextures.Solid
+                        ? null
+                        : TextureGapColor(circleCmd.ColorMode, circBg);
+
+                    if (gapColor.HasValue)
+                    {
+                        x.Draw(FillOptions(), Pens.Solid(gapColor.Value, outlineWidth), circle);
+                    }
+
+                    x.Draw(FillOptions(), outlinePen, circle);
                 }
             });
 
@@ -98,10 +119,11 @@ public class DrawableArc : Drawable, IDrawable
                     circlePts[i] = new PointF(centerX + circleRadius * DetMath.Cos(a), centerY + circleRadius * DetMath.Sin(a));
                 }
 
-                // Highlight outlines are solid per spec; otherwise honor the current line texture
-                // with the same dashed-pel plot the arc path uses. The whole ring goes through one
-                // PlotDashedPolyline call so the dash phase stays continuous around the circle.
-                bool solidCircleOutline = _command.Texture.ShouldHighlight ||
+                // A FILLED circle's highlight outline is solid per spec; otherwise honor the
+                // current line texture with the same dashed-pel plot the arc path uses. The whole
+                // ring goes through one PlotDashedPolyline call so the dash phase stays continuous
+                // around the circle.
+                bool solidCircleOutline = highlightCircleOutline ||
                     _command.Texture.LineTexture == NaplpsTexture.LineTextures.Solid;
                 var circlePelPattern = solidCircleOutline ? null : DrawableLine.PelDashPattern(_command.Texture.LineTexture);
 
