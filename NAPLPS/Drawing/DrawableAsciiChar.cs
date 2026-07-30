@@ -827,7 +827,14 @@ public class DrawableAsciiChar : Drawable, IDrawable
             }
 
             // Draw with stretch transform
-            ctx.DrawText(drawingOptions, charText, font, fgColor, new PointF(textOriginX, textOriginY));
+            // G2 supplementary characters have no glyph in the bundled ASCII face (they used to
+            // fall back to whatever typeface the host machine had, which was wrong AND
+            // platform-dependent, then rendered as .notdef once that fallback was removed - see
+            // issue #53). They are drawn below from MVDI's own vector strokes instead.
+            if (!_command.IsSupplementary)
+            {
+                ctx.DrawText(drawingOptions, charText, font, fgColor, new PointF(textOriginX, textOriginY));
+            }
 
             // ANSI X3.110 §6.2.7.15: underline starts at character field origin,
             // extends across full field width (dx, not proportional), thickness = logical pel dy.
@@ -841,5 +848,66 @@ public class DrawableAsciiChar : Drawable, IDrawable
                 ctx.DrawLine(FillOptions(), underlinePen, new PointF(cellTopX, underlineY), new PointF(cellTopX + fullFieldW, underlineY));
             }
         });
+
+        // MVDI's supplementary vector strokes, generalised from the Prodigy grid onto this path's
+        // cell metrics (issue #53). The MVDI cell is a 7.5-unit-wide grid whose rows map linearly
+        // up from the pen: baseline row 2 sits 24% up the cell and each row adds 9.6% (18/75 and
+        // 7.2/75 of the calibrated 640x480 cell - see DrawMvdiFont). Marks are pre-positioned in
+        // the grid (above-letter at rows 8..9, below-letter at 0..2), so a standalone G2 glyph and
+        // a composing accent use the identical mapping - composition is just a second glyph at the
+        // same pen, exactly like the MVDI path.
+        void DrawCellGlyph(MvdiFont.Glyph gl)
+        {
+            int penX = (int)MathF.Round(penPoint.X);
+            int penY = (int)MathF.Round(penPoint.Y);
+            float unitX = fullCellW / 7.5f;
+
+            int Gx(int gridX) => (int)MathF.Round(penPoint.X + centerOffset + (unitX * (state.TextSpacing == TextSpacing.Proportional ? gridX - gl.LeftBearing : gridX)));
+            int Gy(int gridY) => (int)MathF.Round(penPoint.Y - (cellH * (0.24f + (0.096f * (gridY - 2)))));
+
+            int pelW = Math.Max(1, (int)MathF.Round(unitX * 0.8f));
+            int pelH = Math.Max(1, (int)MathF.Round(cellH * 0.072f));
+
+            var rot = state.TextRotation;
+
+            if (rot == TextRotation.Ninety || rot == TextRotation.TwoSeventy)
+            {
+                (pelW, pelH) = (pelH, pelW);
+            }
+
+            (int X, int Y) Rot(int devX, int devY)
+            {
+                int dx = devX - penX, dy = devY - penY;
+                (int rx, int ry) = rot switch
+                {
+                    TextRotation.Ninety => (dy, -dx),
+                    TextRotation.OneEighty => (-dx, -dy),
+                    TextRotation.TwoSeventy => (-dy, dx),
+                    _ => (dx, dy),
+                };
+
+                return (penX + rx, penY + ry);
+            }
+
+            var segs = gl.Segments;
+
+            for (int i = 0; i + 3 < segs.Length; i += 4)
+            {
+                var a = Rot(Gx(segs[i]), Gy(segs[i + 1]));
+                var b = Rot(Gx(segs[i + 2]), Gy(segs[i + 3]));
+                DrawableLine.PlotMvdiStroke(image, a.X, a.Y, b.X, b.Y, pelW, pelH, fgColor);
+            }
+        }
+
+        if (_command.IsSupplementary)
+        {
+            DrawCellGlyph(MvdiFont.ForSupplementary(_command.SupplementaryCode));
+        }
+
+        // ANSI X3.110 5.3.2.1: a pending non-spacing accent composes onto this base glyph.
+        if (_command.OverlayAccentCode is int accentCode)
+        {
+            DrawCellGlyph(MvdiFont.ForSupplementary(accentCode));
+        }
     }
 }
