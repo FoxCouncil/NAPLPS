@@ -174,6 +174,35 @@ public class Drawable
         ScanlineFiller.Fill(image, points, new FillSource(color.ToPixel<Rgba32>()));
     }
 
+    /// <summary>
+    /// Strokes a path the way ImageSharp's solid pen would, but deterministically: ImageSharp still
+    /// COMPUTES the stroke outline (pure geometry, IEEE-exact ops), and <see cref="ScanlineFiller"/>
+    /// rasterizes it. It is the rasterization - thresholding exactly-0.5 coverage - that differs
+    /// between x64 and arm64 (issue #45), not the geometry, so this keeps the pen's appearance
+    /// while removing the platform dependence. Replacing the geometry instead (pel sweep, or a
+    /// hand-rolled quad stroke) changed 64 corpus files by hundreds of millions of pixels.
+    /// </summary>
+    internal static void StrokePathHard(Image<Rgba32> image, IPath path, float width, ISColor color)
+    {
+        // Byte-for-byte what DrawPathProcessor does for a solid pen: translate the path by
+        // (+0.5, +0.5) FIRST ("align drawing outlines to pixel centers"), THEN outline it with the
+        // pen's default joint and cap. Translating after outlining is geometrically identical but
+        // produces different float bits, which lands snapped vertices on different subrows.
+        var outline = path.Transform(System.Numerics.Matrix3x2.CreateTranslation(0.5f, 0.5f))
+                          .GenerateOutline(width, JointStyle.Square, EndCapStyle.Butt);
+        var contours = new List<PointF[]>();
+
+        foreach (var simple in outline.Flatten())
+        {
+            contours.Add(simple.Points.ToArray());
+        }
+
+        // PenRasterizer, not ScanlineFiller: the centre-sampled filler visibly reshapes thin
+        // strokes (a 2px ring is ALL boundary), while PenRasterizer reproduces ImageSharp's
+        // coverage rasterization with a single cross-platform tie rule.
+        PenRasterizer.FillEvenOdd(image, contours, color.ToPixel<Rgba32>());
+    }
+
     /// <summary>Axis-aligned rectangle as four corners, so it goes through the same filler.</summary>
     internal static void FillRect(Image<Rgba32> image, RectangleF rect, ISColor color)
     {

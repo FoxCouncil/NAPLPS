@@ -56,21 +56,45 @@ internal static class ScanlineFiller
     /// <summary>Fills the closed polygon described by <paramref name="points"/>.</summary>
     public static void Fill(Image<Rgba32> image, ReadOnlySpan<PointF> points, in FillSource source)
     {
-        if (points.Length < 3)
-        {
-            return;
-        }
+        Fill(image, [points.ToArray()], source);
+    }
 
+    /// <summary>
+    /// Fills a shape made of several closed contours under one even-odd pass, so a contour inside
+    /// another (a stroke outline's inner ring) reads as a hole rather than getting filled over.
+    /// </summary>
+    public static void Fill(Image<Rgba32> image, IReadOnlyList<PointF[]> contours, in FillSource source)
+    {
+        FillContours(image, contours, source);
+    }
+
+    private static void FillContours(Image<Rgba32> image, IReadOnlyList<PointF[]> contours, in FillSource source)
+    {
         int width = image.Width;
         int height = image.Height;
 
-        float minYf = points[0].Y;
-        float maxYf = points[0].Y;
+        bool any = false;
+        float minYf = 0f;
+        float maxYf = 0f;
 
-        for (int i = 1; i < points.Length; i++)
+        foreach (var contour in contours)
         {
-            if (points[i].Y < minYf) { minYf = points[i].Y; }
-            if (points[i].Y > maxYf) { maxYf = points[i].Y; }
+            if (contour.Length < 3)
+            {
+                continue;
+            }
+
+            foreach (var p in contour)
+            {
+                if (!any) { minYf = maxYf = p.Y; any = true; continue; }
+                if (p.Y < minYf) { minYf = p.Y; }
+                if (p.Y > maxYf) { maxYf = p.Y; }
+            }
+        }
+
+        if (!any)
+        {
+            return;
         }
 
         int yStart = Math.Max(0, (int)Math.Floor(minYf - 0.5));
@@ -81,8 +105,9 @@ internal static class ScanlineFiller
             return;
         }
 
-        // (x, edgeIndex) pairs. edgeIndex is carried purely to make the sort a total order.
-        var crossings = new List<(double X, int Edge)>(points.Length);
+        // (x, edgeIndex) pairs. edgeIndex is a GLOBAL index across contours, carried purely to
+        // make the sort a total order.
+        var crossings = new List<(double X, int Edge)>(16);
 
         for (int py = yStart; py <= yEnd; py++)
         {
@@ -90,25 +115,37 @@ internal static class ScanlineFiller
 
             crossings.Clear();
 
-            for (int e = 0; e < points.Length; e++)
+            int edgeBase = 0;
+
+            foreach (var points in contours)
             {
-                var a = points[e];
-                var b = points[(e + 1) % points.Length];
-
-                double ay = a.Y;
-                double by = b.Y;
-
-                // Half-open in Y so a vertex shared by two edges is counted exactly once.
-                bool spans = (ay <= sampleY && by > sampleY) || (by <= sampleY && ay > sampleY);
-
-                if (!spans)
+                if (points.Length < 3)
                 {
                     continue;
                 }
 
-                double t = (sampleY - ay) / (by - ay);
+                for (int e = 0; e < points.Length; e++)
+                {
+                    var a = points[e];
+                    var b = points[(e + 1) % points.Length];
 
-                crossings.Add((a.X + t * (b.X - a.X), e));
+                    double ay = a.Y;
+                    double by = b.Y;
+
+                    // Half-open in Y so a vertex shared by two edges is counted exactly once.
+                    bool spans = (ay <= sampleY && by > sampleY) || (by <= sampleY && ay > sampleY);
+
+                    if (!spans)
+                    {
+                        continue;
+                    }
+
+                    double t = (sampleY - ay) / (by - ay);
+
+                    crossings.Add((a.X + t * (b.X - a.X), edgeBase + e));
+                }
+
+                edgeBase += points.Length;
             }
 
             if (crossings.Count < 2)

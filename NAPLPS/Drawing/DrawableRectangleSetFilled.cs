@@ -71,10 +71,23 @@ public class DrawableRectangleSetFilled : Drawable, IDrawable
                     var insetRect = new RectangularPolygon(
                         new PointF(x1 + inset, y1 + inset),
                         new PointF(x2 - inset, y2 - inset));
-                    var outlinePen = _command.Texture.ShouldHighlight
-                        ? Pens.Solid(GetOutlineColor(), outlineWidth)
-                        : GetTexturedPen(GetOutlineColor(), outlineWidth);
-                    x.Draw(fillOptions, outlinePen, insetRect);
+
+                    // A hard-edged SOLID stroke rasterizes through our deterministic filler
+                    // (issue #45: ImageSharp's differs between x64 and arm64). Textured pens keep
+                    // their dash pattern on ImageSharp; anti-aliased previews stay there too.
+                    bool solidPen = _command.Texture.ShouldHighlight || _command.Texture.LineTexture == NaplpsTexture.LineTextures.Solid;
+
+                    if (solidPen && !Options.Antialias)
+                    {
+                        StrokePathHard(image, insetRect, outlineWidth, GetOutlineColor());
+                    }
+                    else
+                    {
+                        var outlinePen = _command.Texture.ShouldHighlight
+                            ? Pens.Solid(GetOutlineColor(), outlineWidth)
+                            : GetTexturedPen(GetOutlineColor(), outlineWidth);
+                        x.Draw(fillOptions, outlinePen, insetRect);
+                    }
                 }
             }
         });

@@ -104,10 +104,17 @@ public class DrawablePolygon : Drawable, IDrawable
                         DrawableLine.PlotSweptPelLine(image, rawPoints[^1], rawPoints[0], bdxMin, bdxMax, bdyMin, bdyMax, boundaryColor);
                     }
                 }
-                else
+                else if (!Options.Antialias)
                 {
                     // Standard rendering: same boundary rule in this path's own style - a
-                    // centre-sampled pel-width perimeter stroke in the drawing color.
+                    // centre-sampled pel-width perimeter stroke in the drawing color. Rasterized
+                    // deterministically; ImageSharp's own hard-edged stroke left 13 standard files
+                    // one boundary pixel apart on arm64 (issue #45).
+                    StrokePathHard(image, polygon, GetPenWidthF(size), pFg.ToISColor());
+                }
+                else
+                {
+                    // Anti-aliased preview only.
                     var boundaryPen = Pens.Solid(pFg.ToISColor(), GetPenWidthF(size));
                     image.Mutate(x => x.Draw(fillOptions, boundaryPen, polygon));
                 }
