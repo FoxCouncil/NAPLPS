@@ -308,6 +308,38 @@ public static unsafe class NativeExportsCtx
     }
 
     /// <summary>
+    /// Append a one-pel rectangle outline (RECTANGLE SET OUTLINED) at (x,y) lower-left,
+    /// size (w,h), in the given palette color. Unlike fill_rect this is a true hairline
+    /// (X3.110 line edges, no fill halo) - for focus/cursor borders. Returns the new
+    /// total command count on success,
+    /// a negative NAPLPS error code otherwise.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_stroke_rect")]
+    public static int StrokeRect(nint handle, double x, double y, double w, double h, int color)
+    {
+        var ctx = Get(handle);
+        if (ctx is null) { return ErrBadHandle; }
+        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(w) || !double.IsFinite(h)
+            || w <= 0 || h <= 0)
+        {
+            return ErrInvalid;
+        }
+
+        try
+        {
+            return ctx.Session.StrokeRect(x, y, w, h, color);
+        }
+        catch (InvalidOperationException)
+        {
+            return ErrInvalid;
+        }
+        catch
+        {
+            return ErrException;
+        }
+    }
+
+    /// <summary>
     /// Refresh and return the pinned RGBA8888 framebuffer pointer (stride = width * 4).
     /// The pointer stays valid for the context's lifetime; contents are coherent only
     /// between the caller's own calls. Returns null on error.

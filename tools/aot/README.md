@@ -263,6 +263,7 @@ naplps_ctx_fill_rect
 naplps_ctx_flush
 naplps_ctx_framebuffer
 naplps_ctx_reset
+naplps_ctx_stroke_rect
 naplps_error_count
 naplps_render_png
 naplps_render_png_prodigy
@@ -291,6 +292,7 @@ Stateful decoder contexts (`naplps_ctx_*`): an opaque handle owning a persistent
 | `naplps_ctx_exec_to(ctx, idx)` / `naplps_ctx_exec_next(ctx, dirty)` | Paint commands; step returns -4 at stream end |
 | `naplps_ctx_draw_text(ctx, x, y, fg, bg, cw, ch, text, len)` | Append a field-text run via the library encoder |
 | `naplps_ctx_fill_rect(ctx, x, y, w, h, color)` | Append a solid grid-quantized filled rectangle (block cursor / cell repaint; see header for cell addressing) |
+| `naplps_ctx_stroke_rect(ctx, x, y, w, h, color)` | Append a one-pel rectangle outline (hairline focus/cursor border) |
 | `naplps_ctx_framebuffer(ctx, &w, &h, &stride)` | Pinned RGBA8888 pixels, valid for the context lifetime |
 
 Error codes (negative return values):

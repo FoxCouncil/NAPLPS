@@ -250,6 +250,19 @@ NAPLPS_IMPORT int32_t   naplps_ctx_fill_rect(NaplpsCtx ctx,
                                              double w, double h,
                                              int32_t color);
 
+/* Append a one-pel rectangle OUTLINE (RECTANGLE SET OUTLINED) at (x, y) lower-left,
+ * normalized size (w, h), palette color 0-15. Unlike fill_rect this draws the four
+ * edges as X3.110 lines: a true one-device-pel hairline with no fill boundary halo -
+ * for focus/cursor borders that must not carry the >=2-pel + halo footprint of a
+ * filled rect. Size is grid-rounded (floored at one wire step); same decoder-state
+ * footprint as fill_rect except the texture's line form stays solid; pen ends at
+ * (x + w, y). Returns the new total command count, or -3 / a negative error as
+ * fill_rect. */
+NAPLPS_IMPORT int32_t   naplps_ctx_stroke_rect(NaplpsCtx ctx,
+                                               double x, double y,
+                                               double w, double h,
+                                               int32_t color);
+
 /* --- Pixels --- */
 /* Return a pointer to the current RGBA8888 framebuffer (refreshed at call time;
  * opaque black before any append - fully transparent instead when the context was

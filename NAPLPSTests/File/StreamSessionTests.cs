@@ -332,4 +332,46 @@ public class StreamSessionTests
         var moreCount = session.DrawText(0.1, 0.1, 7, -1, -1, -1, "OK"u8.ToArray());
         Assert.IsTrue(moreCount > countBefore);
     }
+
+    /// <summary>stroke_rect is the hairline sibling of fill_rect: a one-pel RECTANGLE SET
+    /// OUTLINED whose perimeter paints and whose interior does not - even when the page
+    /// stream left a fill pattern active, since the run emits its own solid TEXTURE.</summary>
+    [TestMethod]
+    public void StrokeRect_PaintsHairlineOutline_InteriorUntouched()
+    {
+        using var session = new NaplpsStreamSession(W, H, prodigy: true);
+        var (top, tops) = NaplpsCommandBuilder.BuildTexture(0, false, 1);
+        session.Append([top, .. tops]);
+
+        var count = session.StrokeRect(0.25, 0.25, 0.5, 0.375, color: 6);
+        session.ExecTo(count - 1);
+
+        var cmds = session.Format!.Commands;
+        Assert.IsInstanceOfType<RectangleSetOutlinedCommand>(cmds[^1].Command);
+
+        var buf = new byte[W * H * 4];
+        session.CopyFramebufferTo(buf);
+
+        static bool IsGreen(byte[] b, int x, int y) =>
+            b[((H - 1 - y) * W + x) * 4 + 1] > 100 && b[((H - 1 - y) * W + x) * 4] < 100;
+
+        // A point on the left edge paints; the rectangle's center does not.
+        var x0 = (int)(0.25 * W);
+        var midY = (int)((0.25 + 0.375 / 2) * H);
+        Assert.IsTrue(
+            IsGreen(buf, x0, midY) || IsGreen(buf, x0 + 1, midY) || IsGreen(buf, x0 - 1, midY),
+            "the outline's left edge should paint");
+        Assert.IsFalse(IsGreen(buf, W / 2, midY), "the interior must stay unpainted");
+
+        // The hairline is thin: the painted area is a small fraction of the filled area.
+        long green = 0;
+        for (var i = 0; i < buf.Length; i += 4)
+        {
+            if (buf[i + 1] > 100 && buf[i] < 100) { green++; }
+        }
+
+        var filledArea = (long)(0.5 * W) * (long)(0.375 * H);
+        Assert.IsTrue(green > 100, $"outline missing ({green} green px)");
+        Assert.IsTrue(green < filledArea / 4, $"outline too thick to be a hairline ({green} green px)");
+    }
 }
