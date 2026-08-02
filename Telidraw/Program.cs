@@ -47,6 +47,11 @@ sealed class Program
                 return HandleCompileCommand(args);
             }
 
+            if (command == "decompile" || command == "--decompile")
+            {
+                return HandleDecompileCommand(args);
+            }
+
             if (command == "help" || command == "--help" || command == "-h" || command == "-?")
             {
                 PrintHelp();
@@ -76,6 +81,7 @@ sealed class Program
         Console.WriteLine("  export --batch <dir> [options]          Batch export all .nap files");
         Console.WriteLine("  diff <file1> <file2> [options]          Compare two NAPLPS files");
         Console.WriteLine("  compile <file.td> [-o output.nap]       Compile Telidraw source to NAPLPS");
+        Console.WriteLine("  decompile <file.nap> [-o output.td]     Decompile NAPLPS to Telidraw source");
         Console.WriteLine();
         Console.WriteLine("Export Options:");
         Console.WriteLine("  --format=png|gif|apng Output format (default: png)");
@@ -100,6 +106,14 @@ sealed class Program
         Console.WriteLine("  --palette-anim        Export blink/palette animation as GIF");
         Console.WriteLine("  --frames=N            Number of animation frames (default: 120)");
         Console.WriteLine();
+        Console.WriteLine("Compile/Decompile Options:");
+        Console.WriteLine("  --system-type=T       Force naplps|prodigy|telidon (default: naplps for");
+        Console.WriteLine("                        compile, auto-detect for decompile)");
+        Console.WriteLine("  --bare                Compile the .td as the complete byte specification");
+        Console.WriteLine("                        (no CAN+NSR sentinels). Decompiler output expects");
+        Console.WriteLine("                        this; it makes nap -> td -> nap byte-exact.");
+        Console.WriteLine("  --stdout              decompile: write the .td source to stdout");
+        Console.WriteLine();
         Console.WriteLine("Diff Options:");
         Console.WriteLine("  --mode=text|visual    Diff mode (default: text)");
         Console.WriteLine("  --size=WxH            Canvas size for visual diff (default: 1024x768)");
@@ -115,6 +129,9 @@ sealed class Program
         Console.WriteLine("  Telidraw export --batch Examples/ --format=png");
         Console.WriteLine("  Telidraw export --batch Examples/ --output-dir=output/ --format=gif");
         Console.WriteLine("  Telidraw export building.nap --palette-anim --loop --frames=300 anim.gif");
+        Console.WriteLine("  Telidraw compile drawing.td -o drawing.nap");
+        Console.WriteLine("  Telidraw decompile picture.nap             # writes picture.td");
+        Console.WriteLine("  Telidraw decompile picture.nap --stdout | less");
         Console.WriteLine("  Telidraw diff file1.nap file2.nap");
         Console.WriteLine("  Telidraw diff file1.nap file2.nap --mode=visual --output=diff.png");
     }
@@ -590,6 +607,8 @@ sealed class Program
 
         var inputPath = args[1];
         string? outputPath = null;
+        var bare = false;
+        var systemType = NaplpsSystemType.NAPLPS;
 
         for (int i = 2; i < args.Length; i++)
         {
@@ -610,6 +629,17 @@ sealed class Program
             {
                 outputPath = args[i]["-o=".Length..];
             }
+            else if (args[i] == "--bare")
+            {
+                bare = true;
+            }
+            else if (args[i].StartsWith("--system-type="))
+            {
+                if (!TryParseSystemType(args[i]["--system-type=".Length..], out systemType))
+                {
+                    return 1;
+                }
+            }
         }
 
         if (!System.IO.File.Exists(inputPath))
@@ -623,16 +653,15 @@ sealed class Program
         try
         {
             var source = System.IO.File.ReadAllText(inputPath);
-            var tokens = new NAPLPS.Telidraw.Lexer(source).Tokenize();
             var lexer = new NAPLPS.Telidraw.Lexer(source);
-            var relexed = lexer.Tokenize();
+            var tokens = lexer.Tokenize();
 
             foreach (var diag in lexer.Diagnostics)
             {
                 Console.Error.WriteLine($"lex: {diag}");
             }
 
-            var parser = new NAPLPS.Telidraw.Parser(relexed);
+            var parser = new NAPLPS.Telidraw.Parser(tokens);
             var program = parser.Parse();
 
             foreach (var diag in parser.Diagnostics)
@@ -646,7 +675,7 @@ sealed class Program
                 return 1;
             }
 
-            var compiler = new NAPLPS.Telidraw.Compiler(program);
+            var compiler = new NAPLPS.Telidraw.Compiler(program, systemType) { BareFormat = bare };
             var format = compiler.Compile();
 
             foreach (var diag in compiler.Diagnostics)
@@ -668,6 +697,101 @@ sealed class Program
         {
             Console.Error.WriteLine($"Error: {ex.Message}");
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// Decompile a NAPLPS byte stream into Telidraw source: the inverse door to the same
+    /// engine `compile` fronts. `--bare` compiles of the output reproduce the input bytes
+    /// exactly (the corpus round-trip invariant).
+    /// </summary>
+    private static int HandleDecompileCommand(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("Error: NAPLPS input file required.");
+            Console.Error.WriteLine("Usage: Telidraw decompile <file.nap> [-o <output.td>] [--system-type=T] [--stdout]");
+            return 1;
+        }
+
+        var inputPath = args[1];
+        string? outputPath = null;
+        var toStdout = false;
+        NaplpsSystemType? forcedType = null;
+
+        for (int i = 2; i < args.Length; i++)
+        {
+            if (args[i] == "-o" || args[i] == "--output")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    Console.Error.WriteLine("Error: -o requires a path argument.");
+                    return 1;
+                }
+                outputPath = args[++i];
+            }
+            else if (args[i].StartsWith("--output="))
+            {
+                outputPath = args[i]["--output=".Length..];
+            }
+            else if (args[i].StartsWith("-o="))
+            {
+                outputPath = args[i]["-o=".Length..];
+            }
+            else if (args[i] == "--stdout" || args[i] == "-")
+            {
+                toStdout = true;
+            }
+            else if (args[i].StartsWith("--system-type="))
+            {
+                if (!TryParseSystemType(args[i]["--system-type=".Length..], out var st))
+                {
+                    return 1;
+                }
+                forcedType = st;
+            }
+        }
+
+        if (!System.IO.File.Exists(inputPath))
+        {
+            Console.Error.WriteLine($"Error: Input file not found: {inputPath}");
+            return 1;
+        }
+
+        try
+        {
+            var format = NaplpsFormat.FromFile(inputPath, forcedType);
+            var source = NAPLPS.Telidraw.Decompiler.Decompile(format);
+
+            if (toStdout)
+            {
+                Console.Out.Write(source);
+                return 0;
+            }
+
+            outputPath ??= IOPath.ChangeExtension(inputPath, ".td");
+            System.IO.File.WriteAllText(outputPath, source);
+            Console.WriteLine($"Decompiled {inputPath} \u2192 {outputPath} ({format.Commands.Count} commands, {source.Length} chars)");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            return 1;
+        }
+    }
+
+    private static bool TryParseSystemType(string value, out NaplpsSystemType systemType)
+    {
+        switch (value.ToLowerInvariant())
+        {
+            case "naplps": systemType = NaplpsSystemType.NAPLPS; return true;
+            case "prodigy": systemType = NaplpsSystemType.Prodigy; return true;
+            case "telidon": systemType = NaplpsSystemType.Telidon; return true;
+            default:
+                Console.Error.WriteLine($"Error: unknown system type '{value}' (naplps|prodigy|telidon).");
+                systemType = NaplpsSystemType.NAPLPS;
+                return false;
         }
     }
 
