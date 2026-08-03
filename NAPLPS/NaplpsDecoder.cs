@@ -118,7 +118,8 @@ public sealed class NaplpsDecoder
     }
 
     private static long Remaining(BinaryReader reader) =>
-        reader.BaseStream.Length - reader.BaseStream.Position;
+        reader.BaseStream.Length - reader.BaseStream.Position
+        + (reader is SpliceBinaryReader s ? s.InjectedRemaining : 0);
 
     /// <summary>
     /// Feeds coded bytes and returns the commands that became complete. A command whose operand
@@ -150,19 +151,47 @@ public sealed class NaplpsDecoder
     {
         var emitted = new List<NaplpsSequence>();
 
-        if (_pending.Count == 0)
+        // A saved expansion tail counts as pending input even when no real bytes are:
+        // it must decode on the next attempt (or be released by Flush), never dropped.
+        if (_pending.Count == 0 && _savedInjected is not { Length: > 0 })
         {
+            // Even with no bytes pending, declaring the stream over must settle definition
+            // buffers whose bytes were consumed in earlier feeds - the one-shot path flushes
+            // an unterminated definition at EOF and the wire path must match.
+            if (atStreamEnd)
+            {
+                FlushOpenDefinitionBuffers(emitted);
+            }
+
             return emitted;
         }
 
         var buffer = _pending.ToArray();
 
         using var stream = new MemoryStream(buffer, writable: false);
-        using var reader = new BinaryReader(stream);
+
+        // The wire path splices macro expansions exactly like the one-shot path (X3.110
+        // 5.5): equivalence between Feed and FromBytes is the contract the corpus gate
+        // holds. The splice queue lives and dies with this attempt; expansions replay
+        // whole on re-decode because no command boundary is committed mid-expansion.
+        using var reader = new SpliceBinaryReader(stream);
+
+        // Resume a macro expansion interrupted by an earlier truncated tail: the saved
+        // injected bytes go back to the front of the queue, making mid-expansion command
+        // boundaries committable like any other (nothing is ever re-executed, so state
+        // mutations from already-emitted expansion commands are never double-applied).
+        if (_savedInjected is { Length: > 0 })
+        {
+            reader.InjectFront(_savedInjected);
+        }
+
+        _savedInjected = null;
 
         _streamingReader = reader;
         _atStreamEnd = atStreamEnd;
         _committedPosition = 0;
+        _committedCommandCount = 0;
+        _committedInjected = null;
 
         try
         {
@@ -170,8 +199,15 @@ public sealed class NaplpsDecoder
         }
         catch (NeedMoreDataException)
         {
-            // The tail is a partial command; it stays pending. An aborted attempt emits nothing,
-            // so `emitted` holds exactly the commands that completed.
+            // The tail is a partial command; it stays pending. The defer discipline throws
+            // before anything is emitted or state is mutated, so the sink trim is a no-op
+            // safety net. A mid-expansion unwind saves the injection queue for resumption.
+            if (emitted.Count > _committedCommandCount)
+            {
+                emitted.RemoveRange(_committedCommandCount, emitted.Count - _committedCommandCount);
+            }
+
+            _savedInjected = _committedInjected;
         }
         finally
         {
@@ -184,15 +220,35 @@ public sealed class NaplpsDecoder
         return emitted;
     }
 
-    /// <summary>Records the current position as a command boundary, for unwinding.</summary>
-    private void Commit(BinaryReader reader)
+    /// <summary>
+    /// Records the current position as a command boundary, for unwinding - together with how
+    /// many commands the sink held, so an aborted attempt can also retract sequences emitted
+    /// past the boundary (a spliced macro expansion that must replay whole).
+    /// </summary>
+    private void Commit(BinaryReader reader, int commandCount)
     {
         if (ReferenceEquals(reader, _streamingReader))
         {
             _committedPosition = reader.BaseStream.Position;
+            _committedCommandCount = commandCount;
             _shiftAtBoundary = State.PendingSingleShift;
+
+            // The boundary's injection-queue snapshot: an abort resumes from HERE, and the
+            // aborted attempt may have consumed queue bytes for the partial command. Null
+            // (the overwhelmingly common empty case) costs nothing per command.
+            _committedInjected = reader is SpliceBinaryReader { HasInjected: true } s
+                ? s.SnapshotPending()
+                : null;
         }
     }
+
+    private int _committedCommandCount;
+
+    /// <summary>Injection queue as of the last committed boundary, for resumption.</summary>
+    private byte[]? _committedInjected;
+
+    /// <summary>Injected macro-body bytes to restore into the next attempt's reader.</summary>
+    private byte[]? _savedInjected;
 
     /// <summary>
     /// A pending SS2/SS3 single-shift is consumed by <see cref="NaplpsState.ResolveByte"/> before
@@ -201,19 +257,6 @@ public sealed class NaplpsDecoder
     /// flags need no restoring: ResolveByte recomputes both, and nothing reads them in between.
     /// </summary>
     private NaplpsState.GsetSlot? _shiftAtBoundary;
-
-    /// <summary>Peek the next raw byte without UTF-8 decoding (-1 at end of stream).</summary>
-    private static int PeekByte(BinaryReader reader)
-    {
-        if (reader.BaseStream.Position >= reader.BaseStream.Length)
-        {
-            return -1;
-        }
-
-        var b = reader.ReadByte();
-        reader.BaseStream.Position -= 1;
-        return b;
-    }
 
     private void RecordError(NaplpsErrorSeverity severity, NaplpsErrorType type, string message, byte? opcode = null, long? streamPosition = null)
     {
@@ -240,9 +283,11 @@ public sealed class NaplpsDecoder
             while (!reader.IsEOF())
             {
                 // Every iteration begins at a command boundary; record it so a truncated tail
-                // can unwind here. An aborted attempt emits nothing, so `commands` always holds
-                // exactly the commands that completed.
-                Commit(reader);
+                // can unwind here. An aborted attempt emits nothing past the boundary, so
+                // `commands` always holds exactly the commands that completed. Boundaries
+                // inside a macro expansion commit too - the injection queue survives an
+                // unwind (see Decode), so the expansion resumes rather than replays.
+                Commit(reader, commands.Count);
 
                 // ANSI X3.110 §6.1.6.3: CAN terminates currently executing macros immediately.
                 // Only check inside macro expansion; at top level CAN is a no-op (the flag
@@ -396,7 +441,7 @@ public sealed class NaplpsDecoder
                 State.ScrollEventOccurred = false;
             }
 
-            Commit(reader);
+            Commit(reader, commands.Count);
         }
         catch (NeedMoreDataException)
         {
@@ -408,9 +453,11 @@ public sealed class NaplpsDecoder
             RecordError(NaplpsErrorSeverity.Error, NaplpsErrorType.UnexpectedEndOfStream, "Stream ended unexpectedly during parsing");
         }
 
-        // Only the top-level parse (always spliced) flushes: recursive sub-stream parses
-        // (DEFP replay, DRCS data) must not disturb definition state they did not open.
-        if (splice != null)
+        // Only the top-level parse (always spliced) flushes, and only at TRUE end of
+        // stream: a definition open at a feed boundary stays pending - its END may be in
+        // the next chunk. Recursive sub-stream parses (DEFP replay, DRCS data) must not
+        // disturb definition state they did not open.
+        if (splice != null && (_streamingReader == null || _atStreamEnd))
         {
             FlushOpenDefinitionBuffers(commands);
         }
@@ -1139,11 +1186,20 @@ public sealed class NaplpsDecoder
     /// or consumes the name byte from the stream for the direct 8-bit C1 forms - appending
     /// it to the command's operands so serialization stays byte-exact.
     /// </summary>
-    private static NaplpsOperands ReadMacroName(BinaryReader reader, NaplpsOperands operands)
+    private NaplpsOperands ReadMacroName(BinaryReader reader, NaplpsOperands operands)
     {
-        if (operands.Count == 0 && !reader.IsEOF())
+        if (operands.Count == 0)
         {
-            operands.Add(reader.ReadByte());
+            if (reader.IsEOF())
+            {
+                // The 8-bit name byte has not arrived; entering definition mode now would
+                // swallow it as body. Defer the whole DEF to the next feed.
+                NeedMoreData(reader);
+            }
+            else
+            {
+                operands.Add(reader.ReadByte());
+            }
         }
 
         return operands;
@@ -1277,7 +1333,7 @@ public sealed class NaplpsDecoder
         // would leave a wholly reset state behind for the re-decode to inherit.
         var remaining = Remaining(reader);
 
-        if (remaining == 0 || (remaining == 1 && PeekByte(reader) is >= 0x40 and <= 0x7F))
+        if (remaining == 0 || (remaining == 1 && reader.PeekByte() is >= 0x40 and <= 0x7F))
         {
             NeedMoreData(reader);
         }

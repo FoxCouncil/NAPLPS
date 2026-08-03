@@ -53,15 +53,13 @@ public class DecoderFeedEquivalenceTests
         return sb.ToString();
     }
 
-    /// <summary>One call, whole buffer: the path <see cref="NaplpsFormat"/> takes.</summary>
+    /// <summary>One call, whole buffer: literally the path <see cref="NaplpsFormat"/> takes,
+    /// splice reader included - the reference must not be a parse no consumer performs.</summary>
     private static (string Commands, string State) OneShot(byte[] bytes, NaplpsSystemType systemType)
     {
-        var decoder = MakeDecoder(systemType);
+        var fmt = NaplpsFormat.FromBytes(bytes, systemType);
 
-        using var stream = new MemoryStream(bytes);
-        using var reader = new BinaryReader(stream);
-
-        return (Fingerprint(decoder.ReadStream(reader)), decoder.State.ToJson());
+        return (Fingerprint(fmt.Commands), fmt.State.ToJson());
     }
 
     /// <summary>Fed in the given chunk sizes, then flushed: the path the wire takes.</summary>
