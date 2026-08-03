@@ -38,8 +38,18 @@ public sealed class NaplpsDecoder
 
     private const int MaxDrcsRecursionDepth = 4;
 
-    /// <summary>Bytes handed to <see cref="Feed"/> that no complete command has claimed yet.</summary>
-    private readonly List<byte> _pending = [];
+    /// <summary>
+    /// Bytes handed to <see cref="Feed"/> that no complete command has claimed yet: the live
+    /// segment is <see cref="_pending"/>[<see cref="_pendingStart"/> ..+ <see cref="_pendingCount"/>].
+    /// Feeds append into spare capacity and consuming a committed prefix advances the start
+    /// offset, so buffer bookkeeping is O(1) amortized per byte - no per-feed copy, no shift.
+    /// The array is compacted only when a dead prefix would otherwise force it to grow.
+    /// </summary>
+    private byte[] _pending = [];
+
+    private int _pendingStart;
+
+    private int _pendingCount;
 
     /// <summary>
     /// The reader over <see cref="_pending"/> while a <see cref="Feed"/> or <see cref="Flush"/>
@@ -55,7 +65,42 @@ public sealed class NaplpsDecoder
     private bool _atStreamEnd;
 
     /// <summary>Bytes received but not yet resolved into a complete command.</summary>
-    public int PendingByteCount => _pending.Count;
+    public int PendingByteCount => _pendingCount;
+
+    /// <summary>Appends bytes to the live pending segment, growing or compacting as needed.</summary>
+    private void PendingAppend(ReadOnlySpan<byte> bytes)
+    {
+        if (_pendingStart + _pendingCount + bytes.Length > _pending.Length)
+        {
+            if (_pendingCount + bytes.Length <= _pending.Length)
+            {
+                // The live bytes plus the new ones fit once the dead prefix is dropped.
+                Array.Copy(_pending, _pendingStart, _pending, 0, _pendingCount);
+            }
+            else
+            {
+                var grown = new byte[Math.Max(_pending.Length * 2, _pendingCount + bytes.Length)];
+                Array.Copy(_pending, _pendingStart, grown, 0, _pendingCount);
+                _pending = grown;
+            }
+
+            _pendingStart = 0;
+        }
+
+        bytes.CopyTo(_pending.AsSpan(_pendingStart + _pendingCount));
+        _pendingCount += bytes.Length;
+    }
+
+    /// <summary>Releases a consumed prefix of the live pending segment.</summary>
+    private void PendingConsume(int count)
+    {
+        _pendingStart += count;
+        _pendingCount -= count;
+        if (_pendingCount == 0)
+        {
+            _pendingStart = 0;
+        }
+    }
 
     public NaplpsDecoder(NaplpsState state)
     {
@@ -133,7 +178,7 @@ public sealed class NaplpsDecoder
     {
         if (!bytes.IsEmpty)
         {
-            _pending.AddRange(bytes);
+            PendingAppend(bytes);
         }
 
         return Decode(atStreamEnd: false);
@@ -164,7 +209,7 @@ public sealed class NaplpsDecoder
 
         // A saved expansion tail counts as pending input even when no real bytes are:
         // it must decode on the next attempt (or be released by Flush), never dropped.
-        if (_pending.Count == 0 && _savedInjected is not { Length: > 0 })
+        if (_pendingCount == 0 && _savedInjected is not { Length: > 0 })
         {
             // Even with no bytes pending, declaring the stream over must settle definition
             // buffers whose bytes were consumed in earlier feeds - the one-shot path flushes
@@ -177,9 +222,9 @@ public sealed class NaplpsDecoder
             return emitted;
         }
 
-        var buffer = _pending.ToArray();
-
-        using var stream = new MemoryStream(buffer, writable: false);
+        // Read the live pending segment in place: the stream is scoped to this attempt and
+        // the buffer cannot move under it (no reentrant Feed), so no copy is taken.
+        using var stream = new MemoryStream(_pending, _pendingStart, _pendingCount, writable: false);
 
         // The wire path splices macro expansions exactly like the one-shot path (X3.110
         // 5.5): equivalence between Feed and FromBytes is the contract the corpus gate
@@ -240,7 +285,7 @@ public sealed class NaplpsDecoder
             State.PendingSingleShift = _shiftAtBoundary;
 
             _savedInjected = _committedInjected;
-            _pending.RemoveRange(0, (int)_committedPosition);
+            PendingConsume((int)_committedPosition);
             throw;
         }
         finally
@@ -249,7 +294,7 @@ public sealed class NaplpsDecoder
             _atStreamEnd = false;
         }
 
-        _pending.RemoveRange(0, atStreamEnd ? buffer.Length : (int)_committedPosition);
+        PendingConsume(atStreamEnd ? _pendingCount : (int)_committedPosition);
 
         return emitted;
     }
