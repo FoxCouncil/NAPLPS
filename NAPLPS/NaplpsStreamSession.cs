@@ -289,7 +289,8 @@ public sealed class NaplpsStreamSession : IDisposable
     ///
     /// Throws <see cref="InvalidOperationException"/> when the stream currently ends inside an
     /// unfinished macro / DRCS / texture definition (the bytes would be swallowed into
-    /// the definition instead of drawing).
+    /// the definition instead of drawing), is paused mid-command (any deferred tail -
+    /// flush a finished stream first), or is not yet established.
     /// </summary>
     public int DrawText(double x, double y, int fg, int bg, double charW, double charH, byte[] ascii)
     {
@@ -298,30 +299,24 @@ public sealed class NaplpsStreamSession : IDisposable
         ArgumentNullException.ThrowIfNull(ascii);
         if (ascii.Length == 0) { throw new ArgumentException("empty text", nameof(ascii)); }
 
-        var state = Format?.State;
-        if (state is not null &&
-            (state.MacroBeingDefined is not null || state.DrcsStartCode is not null || state.TextureBeingDefined is not null))
+        if (!double.IsFinite(x)) { throw new ArgumentOutOfRangeException(nameof(x), "non-finite position"); }
+        if (!double.IsFinite(y)) { throw new ArgumentOutOfRangeException(nameof(y), "non-finite position"); }
+
+        // A size is either a finite value >= 0 (applied only when BOTH are) or a negative
+        // "keep current size" sentinel. NaN is neither: it would silently fall into the
+        // keep branch (NaN >= 0 is false), so it is rejected like the infinities.
+        if (double.IsNaN(charW) || charW is double.PositiveInfinity) { throw new ArgumentOutOfRangeException(nameof(charW), "non-finite size"); }
+        if (double.IsNaN(charH) || charH is double.PositiveInfinity) { throw new ArgumentOutOfRangeException(nameof(charH), "non-finite size"); }
+
+        var incomingGraphicLeft = Format?.State?.GraphicLeftInvocation ?? NaplpsState.GsetSlot.G0;
+
+        return EmitSynthesizedRun(run =>
         {
-            throw new InvalidOperationException("stream ends inside an unfinished definition");
-        }
+            var mbv = run.MultiByteValue;
+            var bytes = run.Bytes;
+            double Quant(double v) => run.Quant(v);
+            void Add((byte opcode, NaplpsOperands operands) cmd) => run.Add(cmd);
 
-        var mbv = (int)(state?.MultiByteValue ?? 3);
-        var grid = 1 << (mbv * 3 - 1);
-        double Quant(double v) => Math.Round(v * grid) / grid;
-
-        var incomingGraphicLeft = state?.GraphicLeftInvocation ?? NaplpsState.GsetSlot.G0;
-
-        var prior = NaplpsEncoder.Use7BitMode;
-        NaplpsEncoder.Use7BitMode = EncodeSynthesized7Bit;
-        var bytes = new List<byte>();
-        void Add((byte opcode, NaplpsOperands operands) cmd)
-        {
-            bytes.Add(cmd.opcode);
-            bytes.AddRange(cmd.operands);
-        }
-
-        try
-        {
             Add(NaplpsCommandBuilder.BuildPointSetAbsolute((float)Quant(x), (float)Quant(y), mbv));
 
             var f = (byte)Math.Clamp(fg, 0, 15);
@@ -354,13 +349,7 @@ public sealed class NaplpsStreamSession : IDisposable
             bytes.Add(ShiftIn);
             bytes.AddRange(ascii);
             bytes.AddRange(RestoreGraphicLeft(incomingGraphicLeft));
-        }
-        finally
-        {
-            NaplpsEncoder.Use7BitMode = prior;
-        }
-
-        return AppendComplete(bytes);
+        });
     }
 
     /// <summary>
@@ -375,7 +364,9 @@ public sealed class NaplpsStreamSession : IDisposable
     /// the X3.110 rectangle pen advance. Shift state is not in that footprint and is not
     /// depended on either: coded 8-bit (see <see cref="EncodeSynthesized7Bit"/>) the run
     /// neither reads nor writes a byte in GL. Throws <see cref="InvalidOperationException"/>
-    /// inside an unfinished definition.
+    /// inside an unfinished definition, is
+    /// paused mid-command (any deferred tail - flush a finished stream first), or is not
+    /// yet established.
     /// </summary>
     public int FillRect(double x, double y, double w, double h, int color)
     {
@@ -386,40 +377,13 @@ public sealed class NaplpsStreamSession : IDisposable
         if (!double.IsFinite(w) || w <= 0) { throw new ArgumentOutOfRangeException(nameof(w), "non-positive size"); }
         if (!double.IsFinite(h) || h <= 0) { throw new ArgumentOutOfRangeException(nameof(h), "non-positive size"); }
 
-        var state = Format?.State;
-        if (state is not null &&
-            (state.MacroBeingDefined is not null || state.DrcsStartCode is not null || state.TextureBeingDefined is not null))
+        return EmitSynthesizedRun(run =>
         {
-            throw new InvalidOperationException("stream ends inside an unfinished definition");
-        }
-
-        var mbv = (int)(state?.MultiByteValue ?? 3);
-        var grid = 1 << (mbv * 3 - 1);
-        double Quant(double v) => Math.Round(v * grid) / grid;
-        double QuantSize(double v) => Math.Max(1.0 / grid, Quant(v));
-
-        var prior = NaplpsEncoder.Use7BitMode;
-        NaplpsEncoder.Use7BitMode = EncodeSynthesized7Bit;
-        var bytes = new List<byte>();
-        void Add((byte opcode, NaplpsOperands operands) cmd)
-        {
-            bytes.Add(cmd.opcode);
-            bytes.AddRange(cmd.operands);
-        }
-
-        try
-        {
-            Add(NaplpsCommandBuilder.BuildTexture(0, false, 0, multiByteValue: mbv));
-            Add(NaplpsCommandBuilder.BuildSelectColor((byte)Math.Clamp(color, 0, 15)));
-            Add(NaplpsCommandBuilder.BuildRectangleSetFilled(
-                (float)Quant(x), (float)Quant(y), (float)QuantSize(w), (float)QuantSize(h), mbv));
-        }
-        finally
-        {
-            NaplpsEncoder.Use7BitMode = prior;
-        }
-
-        return AppendComplete(bytes);
+            run.Add(NaplpsCommandBuilder.BuildTexture(0, false, 0, multiByteValue: run.MultiByteValue));
+            run.Add(NaplpsCommandBuilder.BuildSelectColor((byte)Math.Clamp(color, 0, 15)));
+            run.Add(NaplpsCommandBuilder.BuildRectangleSetFilled(
+                (float)run.Quant(x), (float)run.Quant(y), (float)run.QuantSize(w), (float)run.QuantSize(h), run.MultiByteValue));
+        });
     }
 
     /// <summary>
@@ -430,7 +394,9 @@ public sealed class NaplpsStreamSession : IDisposable
     /// footprint of a filled rect. Position and size are rounded to the coordinate wire grid
     /// (size floored at one grid step). Decoder-state footprint matches FillRect except the
     /// texture's line form stays solid; the pen ends at (x + w, y). Throws
-    /// <see cref="InvalidOperationException"/> inside an unfinished definition.
+    /// <see cref="InvalidOperationException"/> inside an unfinished definition, is
+    /// paused mid-command (any deferred tail - flush a finished stream first), or is not
+    /// yet established.
     /// </summary>
     public int StrokeRect(double x, double y, double w, double h, int color)
     {
@@ -441,40 +407,111 @@ public sealed class NaplpsStreamSession : IDisposable
         if (!double.IsFinite(w) || w <= 0) { throw new ArgumentOutOfRangeException(nameof(w), "non-positive size"); }
         if (!double.IsFinite(h) || h <= 0) { throw new ArgumentOutOfRangeException(nameof(h), "non-positive size"); }
 
+        return EmitSynthesizedRun(run =>
+        {
+            run.Add(NaplpsCommandBuilder.BuildTexture(0, false, 0, multiByteValue: run.MultiByteValue));
+            run.Add(NaplpsCommandBuilder.BuildSelectColor((byte)Math.Clamp(color, 0, 15)));
+            run.Add(NaplpsCommandBuilder.BuildRectangleSetOutlined(
+                (float)run.Quant(x), (float)run.Quant(y), (float)run.QuantSize(w), (float)run.QuantSize(h), run.MultiByteValue));
+        });
+    }
+
+    /// <summary>
+    /// Shared scaffold for the synthesized-run primitives (draw-text, fill-rect,
+    /// stroke-rect): the definition and mid-command guards, the wire-grid quantizer,
+    /// the synthesized-encoding pinning, single-shift neutrality, and the complete-run
+    /// append. Every primitive gets identical safety semantics from one place.
+    /// </summary>
+    private int EmitSynthesizedRun(Action<SynthesizedRun> build)
+    {
+        // Before establishment the run's bytes would join the held header and pollute
+        // system-type detection (an A1 mid-marker plus run bytes locks the wrong system
+        // type for the session's whole life). The caller establishes first - append the
+        // page's opening bytes, or flush an intentionally-empty stream.
+        if (_decoder is null)
+        {
+            throw new InvalidOperationException("system type not yet established; append stream bytes (or flush) before synthesizing runs");
+        }
+
         var state = Format?.State;
+
         if (state is not null &&
             (state.MacroBeingDefined is not null || state.DrcsStartCode is not null || state.TextureBeingDefined is not null))
         {
             throw new InvalidOperationException("stream ends inside an unfinished definition");
         }
 
-        var mbv = (int)(state?.MultiByteValue ?? 3);
-        var grid = 1 << (mbv * 3 - 1);
-        double Quant(double v) => Math.Round(v * grid) / grid;
-        double QuantSize(double v) => Math.Max(1.0 / grid, Quant(v));
+        // A deferred tail is a partial command - an ESC missing its final byte, a DEF
+        // missing its name byte, an operand list still open, a macro expansion awaiting
+        // its next byte. Interposing a run there would splice the run's first bytes into
+        // the caller's command (the run's opcode becomes the ESC final, the macro NAME,
+        // or a truncated operand list's terminator). Same rule as naplps.h gives for
+        // flush: not on a stream merely paused mid-command.
+        if (_decoder.HasDeferredTail)
+        {
+            throw new InvalidOperationException("stream is paused mid-command; a synthesized run would corrupt it");
+        }
 
+        var run = new SynthesizedRun((int)(state?.MultiByteValue ?? 3));
         var prior = NaplpsEncoder.Use7BitMode;
         NaplpsEncoder.Use7BitMode = EncodeSynthesized7Bit;
-        var bytes = new List<byte>();
-        void Add((byte opcode, NaplpsOperands operands) cmd)
-        {
-            bytes.Add(cmd.opcode);
-            bytes.AddRange(cmd.operands);
-        }
 
         try
         {
-            Add(NaplpsCommandBuilder.BuildTexture(0, false, 0, multiByteValue: mbv));
-            Add(NaplpsCommandBuilder.BuildSelectColor((byte)Math.Clamp(color, 0, 15)));
-            Add(NaplpsCommandBuilder.BuildRectangleSetOutlined(
-                (float)Quant(x), (float)Quant(y), (float)QuantSize(w), (float)QuantSize(h), mbv));
+            build(run);
         }
         finally
         {
             NaplpsEncoder.Use7BitMode = prior;
         }
 
-        return AppendComplete(bytes);
+        // A pending SS2/SS3 belongs to the CALLER's next byte, not to the run's leading
+        // PDI opcode (which would otherwise resolve through G2/G3 as a character). Park
+        // it across the run and put it back for the caller's stream.
+        var pendingShift = state?.PendingSingleShift;
+
+        if (state is not null)
+        {
+            state.PendingSingleShift = null;
+        }
+
+        try
+        {
+            return AppendComplete(run.Bytes);
+        }
+        finally
+        {
+            if (state is not null && pendingShift is not null)
+            {
+                state.PendingSingleShift = pendingShift;
+            }
+        }
+    }
+
+    /// <summary>A synthesized byte run under construction, with the wire-grid quantizers.</summary>
+    private sealed class SynthesizedRun
+    {
+        public SynthesizedRun(int multiByteValue)
+        {
+            MultiByteValue = multiByteValue;
+            Grid = 1 << (multiByteValue * 3 - 1);
+        }
+
+        public int MultiByteValue { get; }
+
+        public int Grid { get; }
+
+        public List<byte> Bytes { get; } = [];
+
+        public double Quant(double v) => Math.Round(v * Grid) / Grid;
+
+        public double QuantSize(double v) => Math.Max(1.0 / Grid, Quant(v));
+
+        public void Add((byte opcode, NaplpsOperands operands) cmd)
+        {
+            Bytes.Add(cmd.opcode);
+            Bytes.AddRange(cmd.operands);
+        }
     }
 
     /// <summary>

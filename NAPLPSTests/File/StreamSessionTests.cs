@@ -201,6 +201,7 @@ public class StreamSessionTests
         var (dop, dops) = NaplpsCommandBuilder.BuildDomain(1, 3, 2, new System.Numerics.Vector3(1f / 256, 1f / 256, 0));
         var (top, tops) = NaplpsCommandBuilder.BuildTexture(0, false, 1);
         session.Append([dop, .. dops, top, .. tops]);
+        session.Flush();   // the page stream is over; release its operand-terminated tail
 
         // Off-grid position: 3/40 is not representable; must round to the wire grid.
         var count = session.FillRect(3.0 / 40, 0.4, 1.0 / 40, 0.0390625, color: 6);
@@ -301,6 +302,118 @@ public class StreamSessionTests
             session.FillRect(double.PositiveInfinity, 0.1, 0.05, 0.05, 6));
     }
 
+    /// <summary>
+    /// A synthesized run must never land on a paused stream: a bare ESC would consume the
+    /// run's first opcode as its final byte, a DEF would take it as the macro name, an open
+    /// operand list would truncate the caller's own command, and a deferred macro expansion
+    /// would eat the run's leading bytes on resume. All of them reject with the same error.
+    /// </summary>
+    [TestMethod]
+    public void SynthesizedRun_RejectsAnyDeferredTail()
+    {
+        // A bare ESC deferred at the frontier.
+        using var esc = new NaplpsStreamSession(W, H, prodigy: true);
+        esc.Append([0x0F, 0x1B]);
+        Assert.ThrowsExactly<InvalidOperationException>(() =>
+            esc.DrawText(0.1, 0.1, 7, -1, -1, -1, "X"u8.ToArray()));
+
+        // An open operand list: LINE SET ABS with one of its coordinate bytes in flight.
+        using var line = new NaplpsStreamSession(W, H, prodigy: true);
+        line.Append([0x20]);
+        line.Append([0xA8, 0xC1]);
+        Assert.ThrowsExactly<InvalidOperationException>(() =>
+            line.FillRect(0.1, 0.1, 0.05, 0.05, 6));
+
+        // A deferred macro expansion: the tail lives in the injection queue while zero
+        // real bytes are pending - the gate must see it there too. Designate the macro
+        // set into G3 and lock-shift it, DEF MACRO '!' whose body is a bare REPEAT
+        // opcode, END, then invoke '!' as the last byte of the append: the spliced
+        // REPEAT defers awaiting its count while the pending buffer is empty.
+        using var spliced = new NaplpsStreamSession(W, H, prodigy: false);
+        spliced.Append([0x1B, 0x2F, 0x7A, 0x1B, 0x6F, 0x80, 0x21, 0x86, 0x85, 0x21]);
+        Assert.ThrowsExactly<InvalidOperationException>(() =>
+            spliced.DrawText(0.1, 0.1, 7, -1, -1, -1, "X"u8.ToArray()));
+    }
+
+    /// <summary>
+    /// Before the system type is established, a synthesized run's bytes would join the
+    /// held header and pollute detection (an A1 mid-marker plus the run's bytes locks the
+    /// wrong system type forever). It must reject, not participate.
+    /// </summary>
+    [TestMethod]
+    public void SynthesizedRun_RejectsAnUnestablishedSession()
+    {
+        using var session = new NaplpsStreamSession(W, H, prodigy: false);
+        session.Append([0xA1]);   // half a Prodigy marker: detection undecided
+
+        Assert.ThrowsExactly<InvalidOperationException>(() =>
+            session.FillRect(0.1, 0.1, 0.05, 0.05, 6));
+
+        // The stream then resolves normally: the run did not poison detection.
+        session.Append([0xC8, 0xC0, 0xC0, 0xC9, 0x20]);
+        Assert.AreEqual(NaplpsSystemType.Prodigy, session.Format!.SystemType);
+    }
+
+    /// <summary>Flushing an intentionally-empty auto-detect session establishes it
+    /// (generic NAPLPS), so synthesized runs work on a session with no wire bytes.</summary>
+    [TestMethod]
+    public void Flush_EstablishesAnEmptySession_ForSynthesizedRuns()
+    {
+        using var session = new NaplpsStreamSession(W, H, prodigy: false);
+        session.Flush();
+
+        Assert.IsNotNull(session.Format);
+        Assert.AreEqual(NaplpsSystemType.NAPLPS, session.Format!.SystemType);
+
+        var count = session.DrawText(0.1, 0.1, 7, -1, -1, -1, "X"u8.ToArray());
+        Assert.IsTrue(count > 0, "a run on the established empty session must append");
+    }
+
+    /// <summary>A caller-pending SS2/SS3 is parked across a synthesized run and restored
+    /// for the caller's next byte, instead of resolving the run's opcode through G2/G3.</summary>
+    [TestMethod]
+    public void SynthesizedRun_ParksACallerPendingSingleShift()
+    {
+        using var session = new NaplpsStreamSession(W, H, prodigy: true);
+        session.Append([0x20, 0x19]);   // a complete command, then SS2 pending for the NEXT byte
+        session.Flush();
+
+        var shiftBefore = session.Format!.State.PendingSingleShift;
+        Assert.IsNotNull(shiftBefore, "SS2 should leave a pending single shift");
+
+        var count = session.DrawText(0.1, 0.1, 7, -1, -1, -1, "X"u8.ToArray());
+        session.ExecTo(count - 1);
+
+        Assert.AreEqual(shiftBefore, session.Format!.State.PendingSingleShift,
+            "the caller's pending single shift must survive the synthesized run");
+    }
+
+    /// <summary>exec_to before anything is paintable is a status, not an error: the session
+    /// reports -1 (nothing painted), which the ABI shim maps to the -4 status.</summary>
+    [TestMethod]
+    public void ExecTo_NothingPaintedYet_IsAStatusNotAnError()
+    {
+        using var session = new NaplpsStreamSession(W, H, prodigy: true);
+        session.Append([0xA4, 0xC0]);   // a deferred partial command: zero complete commands
+
+        Assert.AreEqual(-1, session.ExecTo(5), "nothing painted yet must report the status, not throw");
+    }
+
+    /// <summary>NaN sizes are neither a valid size nor the negative keep-current sentinel;
+    /// they must be rejected, not silently treated as "keep".</summary>
+    [TestMethod]
+    public void DrawText_RejectsNaNSizes()
+    {
+        using var session = new NaplpsStreamSession(W, H, prodigy: true);
+        session.Append([0x20]);
+        session.Flush();
+
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            session.DrawText(0.1, 0.1, 7, -1, double.NaN, 0.0390625, "X"u8.ToArray()));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            session.DrawText(0.1, 0.1, 7, -1, 0.025, double.NaN, "X"u8.ToArray()));
+    }
+
     /// <summary>An append rejected in argument validation must leave the session unchanged
     /// (bytes, counts, pixels) and the session usable afterwards.</summary>
     [TestMethod]
@@ -309,6 +422,7 @@ public class StreamSessionTests
         using var session = new NaplpsStreamSession(W, H, prodigy: true);
         var good = System.IO.File.ReadAllBytes(Example("MM01.NAP"));
         session.Append(good);
+        session.Flush();
         while (session.ExecNext() is not null) { }
         var countBefore = session.CommandCount;
         var before = new byte[W * H * 4];
@@ -342,6 +456,7 @@ public class StreamSessionTests
         using var session = new NaplpsStreamSession(W, H, prodigy: true);
         var (top, tops) = NaplpsCommandBuilder.BuildTexture(0, false, 1);
         session.Append([top, .. tops]);
+        session.Flush();   // the page stream is over; release its operand-terminated tail
 
         var count = session.StrokeRect(0.25, 0.25, 0.5, 0.375, color: 6);
         session.ExecTo(count - 1);

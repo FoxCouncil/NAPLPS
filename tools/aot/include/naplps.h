@@ -173,7 +173,8 @@ NAPLPS_IMPORT int32_t   naplps_ctx_command_count(NaplpsCtx ctx);
 
 /* --- Execute / step --- */
 /* Paint the framebuffer up through (and including) cmd_index, clamped to the
- * stream end. Idempotent for already-painted commands. Returns the highest painted
+ * stream end. Idempotent for already-painted commands. Returns -4 (a status, not an
+ * error) when nothing has been painted yet. Otherwise returns the highest painted
  * index, -3 for a negative cmd_index, or a negative error code. */
 NAPLPS_IMPORT int32_t   naplps_ctx_exec_to(NaplpsCtx ctx, int32_t cmd_index);
 
@@ -200,8 +201,10 @@ NAPLPS_IMPORT int32_t   naplps_ctx_exec_next(NaplpsCtx ctx, NaplpsRect* out_dirt
  *                   definitions render the custom glyphs)
  *
  * Independent of the decoder state it lands in, and neutral with respect to it: call it
- * over any prior stream that is at a command boundary (see the -3 rule below), with no
- * prefix bytes of your own. The drawing
+ * over any prior stream at a COMMAND BOUNDARY, with no prefix bytes of your own -
+ * if the stream is paused mid-command (bytes pending, including a macro expansion
+ * awaiting its next byte), the call returns -3 rather than splice itself into the
+ * partial command; naplps_ctx_flush a truly-finished stream first. The drawing
  * commands are coded so they resolve whatever the prior stream shifted into GL, the text
  * is shifted into a character set so it draws rather than executing as drawing commands,
  * and the incoming GL invocation is put back afterwards - so a caller that paints a field
@@ -215,9 +218,10 @@ NAPLPS_IMPORT int32_t   naplps_ctx_exec_next(NaplpsCtx ctx, NaplpsRect* out_dirt
  * Other state footprint: pen, color and (when a size is passed) character size, as the
  * emitted commands imply.
  *
- * Returns the new total command count; -3 when the stream currently ends inside an
- * unfinished macro/DRCS/texture definition (the bytes would be swallowed into the
- * definition); or a negative error code. */
+ * Returns the new total command count; -3 for a non-finite coordinate or size, when
+ * the stream currently ends inside an unfinished macro/DRCS/texture definition (the
+ * bytes would be swallowed into the definition), is paused mid-command, or is not yet
+ * established; or a negative error code. */
 NAPLPS_IMPORT int32_t   naplps_ctx_draw_text(NaplpsCtx ctx,
                                              double x, double y,
                                              int32_t fg, int32_t bg,
@@ -243,8 +247,9 @@ NAPLPS_IMPORT int32_t   naplps_ctx_draw_text(NaplpsCtx ctx,
  * rectangle pen advance. Shift state is not in that footprint, and is not depended on
  * either - like draw_text, call it over any prior stream at a command boundary.
  *
- * Returns the new total command count; -3 for a non-positive or non-finite argument
- * or when the stream ends inside an unfinished definition; or a negative error code. */
+ * Returns the new total command count; -3 for a non-positive or non-finite argument,
+ * when the stream ends inside an unfinished definition, is paused mid-command, or is
+ * not yet established; or a negative error code. */
 NAPLPS_IMPORT int32_t   naplps_ctx_fill_rect(NaplpsCtx ctx,
                                              double x, double y,
                                              double w, double h,

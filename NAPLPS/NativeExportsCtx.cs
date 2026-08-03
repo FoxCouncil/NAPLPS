@@ -196,7 +196,12 @@ public static unsafe class NativeExportsCtx
 
         try
         {
-            return ctx.Session.ExecTo(cmdIndex);
+            var painted = ctx.Session.ExecTo(cmdIndex);
+
+            // Nothing painted yet (no complete commands, or no canvas): a healthy state,
+            // reported as the -4 status code (like exec_next's exhausted), NOT the -1
+            // exception code it previously collided with.
+            return painted < 0 ? Exhausted : painted;
         }
         catch (InvalidOperationException)
         {
@@ -247,9 +252,10 @@ public static unsafe class NativeExportsCtx
     /// <summary>
     /// Append a field-text run built by the library's own encoder (Point Set Absolute,
     /// SELECT COLOR, optional TEXT character size, text bytes); execute it via
-    /// exec_next/exec_to like any appended bytes. Returns the new total command count,
-    /// -3 when the stream ends inside an unfinished macro/DRCS/texture definition, or a
-    /// negative error code. See naplps.h for parameter semantics.
+    /// exec_next/exec_to like any appended bytes. Returns the new total command count;
+    /// -3 for a non-finite coordinate, when the stream ends inside an unfinished
+    /// macro/DRCS/texture definition, is paused mid-command, or is not yet established;
+    /// or a negative error code. See naplps.h for parameter semantics.
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_draw_text")]
     public static int DrawText(nint handle, double x, double y, int fg, int bg,
@@ -258,6 +264,13 @@ public static unsafe class NativeExportsCtx
         var ctx = Get(handle);
         if (ctx is null) { return ErrBadHandle; }
         if (ascii == null || len <= 0) { return ErrInvalid; }
+
+        if (!double.IsFinite(x) || !double.IsFinite(y)
+            || double.IsNaN(charW) || charW is double.PositiveInfinity
+            || double.IsNaN(charH) || charH is double.PositiveInfinity)
+        {
+            return ErrInvalid;
+        }
 
         try
         {
@@ -280,7 +293,8 @@ public static unsafe class NativeExportsCtx
     /// FILLED) at (x, y) lower-left with size (w, h), all rounded to the wire grid -
     /// the block-cursor / cell-repaint primitive. Executes via exec_next/exec_to like any
     /// appended bytes. Returns the new total command count, -3 for a non-positive size or
-    /// inside an unfinished definition, or a negative error code.
+    /// inside an unfinished definition, is paused mid-command, or is not yet
+    /// established; or a negative error code.
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_fill_rect")]
     public static int FillRect(nint handle, double x, double y, double w, double h, int color)

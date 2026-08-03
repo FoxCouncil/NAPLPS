@@ -47,6 +47,7 @@ public class StreamSessionPerfTests
         if (preload is not null)
         {
             session.Append(preload);
+            session.Flush();
             while (session.ExecNext() is not null) { }
         }
 
@@ -102,6 +103,7 @@ public class StreamSessionPerfTests
 
         using var session = new NaplpsStreamSession(W, H, prodigy: true);
         session.Append(Page("MM01.NAP"));
+        session.Flush();
         while (session.ExecNext() is not null) { }
 
         var timings = new double[ticks];
