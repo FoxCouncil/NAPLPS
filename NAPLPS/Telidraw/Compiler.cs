@@ -72,14 +72,20 @@ public sealed class Compiler
     /// </summary>
     public bool BareFormat { get; set; }
 
-    public Compiler(ProgramNode program, NaplpsSystemType systemType = NaplpsSystemType.NAPLPS)
+    /// <summary>
+    /// <paramref name="systemType"/> null means unspecified: the non-bare header defaults to
+    /// generic NAPLPS and the raw-statement re-parse auto-detects. An explicit value forces
+    /// that system everywhere - including bare mode's encoding state and the re-parse, so
+    /// --system-type=naplps can suppress Prodigy auto-detection of raw a1 c8 bytes.
+    /// </summary>
+    public Compiler(ProgramNode program, NaplpsSystemType? systemType = null)
     {
         _program = program;
         _systemType = systemType;
         _format = null!; // set in Compile()
     }
 
-    private readonly NaplpsSystemType _systemType;
+    private readonly NaplpsSystemType? _systemType;
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
@@ -103,11 +109,20 @@ public sealed class Compiler
     {
         if (BareFormat)
         {
-            _format = new NaplpsFormat(InitialState?.Clone() ?? new NaplpsState());
+            var state = InitialState?.Clone() ?? new NaplpsState();
+
+            // An explicit system type shapes the bare encoding state (coordinate precision,
+            // color map, ambient metrics); a caller-supplied InitialState always wins.
+            if (InitialState is null && _systemType.HasValue)
+            {
+                NaplpsDecoder.ApplySystemDefaults(state, _systemType.Value);
+            }
+
+            _format = new NaplpsFormat(state);
         }
         else
         {
-            _format = NaplpsFormat.New(_systemType);
+            _format = NaplpsFormat.New(_systemType ?? NaplpsSystemType.NAPLPS);
         }
 
         // Apply caller-supplied initial pen so the compiler's relative-vertex math (used by
@@ -142,8 +157,7 @@ public sealed class Compiler
         // single commands in isolation, where a fresh parse would misread operands).
         if (_emittedRaw && InitialState is null)
         {
-            return NaplpsFormat.FromBytes(_format.ToBytes(),
-                _systemType == NaplpsSystemType.NAPLPS ? null : _systemType);
+            return NaplpsFormat.FromBytes(_format.ToBytes(), _systemType);
         }
 
         return _format;
