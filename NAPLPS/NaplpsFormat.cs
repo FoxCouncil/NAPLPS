@@ -99,6 +99,54 @@ public partial class NaplpsFormat
     }
 
     /// <summary>
+    /// Incremental header probe shared with the streaming session: the same rules as
+    /// <see cref="DetectSystemType"/> (Telidon's leading 0x0E; A1 C8 Prodigy marker
+    /// possibly behind up to eight CAN/NSR sentinel bytes - issue #41), but able to say
+    /// "undecided" (null) while the header could still resolve differently as more bytes
+    /// arrive. With <paramref name="atStreamEnd"/> it always decides.
+    /// </summary>
+    internal static NaplpsSystemType? TryDetectSystemType(IReadOnlyList<byte> header, bool atStreamEnd)
+    {
+        if (header.Count == 0)
+        {
+            return atStreamEnd ? NaplpsSystemType.NAPLPS : null;
+        }
+
+        if (header[0] == 0x0E)
+        {
+            return NaplpsSystemType.Telidon;
+        }
+
+        var i = 0;
+        var skipped = 0;
+
+        while (i < header.Count && (header[i] == 0x18 || header[i] == 0x1F) && skipped < 8)
+        {
+            i++;
+            skipped++;
+        }
+
+        if (i >= header.Count)
+        {
+            // Nothing but (skippable) sentinels so far; the marker could still follow.
+            return atStreamEnd ? NaplpsSystemType.NAPLPS : null;
+        }
+
+        if (header[i] != 0xA1)
+        {
+            return NaplpsSystemType.NAPLPS;
+        }
+
+        if (i + 1 >= header.Count)
+        {
+            // A1 seen, C8 could be the next byte.
+            return atStreamEnd ? NaplpsSystemType.NAPLPS : null;
+        }
+
+        return header[i + 1] == 0xC8 ? NaplpsSystemType.Prodigy : NaplpsSystemType.NAPLPS;
+    }
+
+    /// <summary>
     /// Detects the NAPLPS system type based on file header patterns.
     /// - Telidon (699): First byte is 0x0E (Shift-Out) - original 1978 hardware format
     /// - Prodigy: First two bytes are A1 C8 (Domain command in 8-bit mode)

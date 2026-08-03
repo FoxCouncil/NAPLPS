@@ -180,25 +180,19 @@ public sealed class NaplpsStreamSession : IDisposable
         {
             systemType = NaplpsSystemType.Prodigy;
         }
-        else if (_header.Count >= 1 && _header[0] == 0x0E)
-        {
-            // Telidon (version 699) is decided by its single leading Shift-Out.
-            systemType = NaplpsSystemType.Telidon;
-        }
-        else if (_header.Count >= 2)
-        {
-            systemType = _header[0] == 0xA1 && _header[1] == 0xC8
-                ? NaplpsSystemType.Prodigy
-                : NaplpsSystemType.NAPLPS;
-        }
-        else if (atStreamEnd)
-        {
-            // A stream of nought or one byte that is not 0x0E: nothing left to wait for.
-            systemType = NaplpsSystemType.NAPLPS;
-        }
         else
         {
-            return false;
+            // The same rules as the file path, incrementally: Telidon's 0x0E, the A1 C8
+            // Prodigy marker possibly behind CAN/NSR sentinels, undecided while more
+            // header bytes could still change the answer.
+            var detected = NaplpsFormat.TryDetectSystemType(_header, atStreamEnd);
+
+            if (detected is null)
+            {
+                return false;
+            }
+
+            systemType = detected.Value;
         }
 
         var state = new NaplpsState();

@@ -374,4 +374,31 @@ public class StreamSessionTests
         Assert.IsTrue(green > 100, $"outline missing ({green} green px)");
         Assert.IsTrue(green < filledArea / 4, $"outline too thick to be a hairline ({green} green px)");
     }
+
+    /// <summary>The session must detect the system type with the file path's rules,
+    /// incrementally: the A1 C8 Prodigy marker counts even behind leading CAN/NSR
+    /// sentinels, and a lone A1 stays undecided until its partner byte arrives.</summary>
+    [TestMethod]
+    public void SystemType_DetectedIncrementally_ThroughSentinels()
+    {
+        // Sentinel-prefixed Prodigy marker fed one byte at a time: CAN, NSR, then A1 C8.
+        using var prodigy = new NaplpsStreamSession(W, H, prodigy: false);
+        foreach (var b in new byte[] { 0x18, 0x1F, 0xA1 })
+        {
+            prodigy.Append([b]);
+        }
+
+        Assert.IsNull(prodigy.Format, "a lone A1 must stay undecided");
+
+        prodigy.Append([0xC8, 0xC0, 0xC0, 0xC9, 0x20]);
+        Assert.IsNotNull(prodigy.Format);
+        Assert.AreEqual(NaplpsSystemType.Prodigy, prodigy.Format!.SystemType,
+            "the sentinel-prefixed A1 C8 marker must establish Prodigy, as the file path does");
+
+        // A stream whose second byte rules the marker out locks generic NAPLPS.
+        using var generic = new NaplpsStreamSession(W, H, prodigy: false);
+        generic.Append([0xA1, 0xA3]);
+        Assert.IsNotNull(generic.Format);
+        Assert.AreEqual(NaplpsSystemType.NAPLPS, generic.Format!.SystemType);
+    }
 }
