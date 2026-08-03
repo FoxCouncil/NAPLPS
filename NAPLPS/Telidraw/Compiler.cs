@@ -230,8 +230,12 @@ public sealed class Compiler
                 break;
 
             case TokenKind.Line:
-                ExpectArgs(c, 2);
-                EmitLine((float)NormX(Evaluate(c.Args[0])), (float)NormY(Evaluate(c.Args[1])));
+                if (c.Args.Count < 2 || c.Args.Count % 2 != 0)
+                {
+                    Diag(DiagnosticSeverity.Error, c.Line, c.Column, $"'line' needs pairs of x,y coords (got {c.Args.Count})");
+                    break;
+                }
+                EmitLine(c);
                 break;
 
             case TokenKind.Rect:
@@ -316,9 +320,12 @@ public sealed class Compiler
                 break;
 
             case TokenKind.LineRel:
-                ExpectArgs(c, 2);
-                EmitCommand(NaplpsCommandBuilder.BuildLineRelative(
-                    (float)NormW(Evaluate(c.Args[0])), (float)NormH(Evaluate(c.Args[1])), CurrentMv));
+                if (c.Args.Count < 2 || c.Args.Count % 2 != 0)
+                {
+                    Diag(DiagnosticSeverity.Error, c.Line, c.Column, $"'line-rel' needs pairs of dx,dy coords (got {c.Args.Count})");
+                    break;
+                }
+                EmitLineRel(c);
                 break;
 
             case TokenKind.RectOutline:
@@ -499,10 +506,43 @@ public sealed class Compiler
         _pen = new Vector3(x, y, 0);
     }
 
-    private void EmitLine(float x, float y)
+    private void EmitLine(CommandCallNode c)
     {
-        EmitCommand(NaplpsCommandBuilder.BuildLineAbsolute(x, y, CurrentMv));
-        _pen = new Vector3(x, y, 0);
+        // X3.110 5.3.3.2: LINE takes a series of coordinate blocks — a chained polyline in
+        // one command (issue #56). The pen ends at the last vertex.
+        var pts = new Vector3[c.Args.Count / 2];
+
+        for (int i = 0; i < pts.Length; i++)
+        {
+            pts[i] = new Vector3(
+                (float)NormX(Evaluate(c.Args[2 * i])),
+                (float)NormY(Evaluate(c.Args[2 * i + 1])),
+                0);
+        }
+
+        EmitCommand(NaplpsCommandBuilder.BuildLineAbsolute(pts, CurrentMv));
+        _pen = pts[^1];
+    }
+
+    private void EmitLineRel(CommandCallNode c)
+    {
+        // Deltas chain; the pen advances by their sum.
+        var deltas = new Vector3[c.Args.Count / 2];
+
+        for (int i = 0; i < deltas.Length; i++)
+        {
+            deltas[i] = new Vector3(
+                (float)NormW(Evaluate(c.Args[2 * i])),
+                (float)NormH(Evaluate(c.Args[2 * i + 1])),
+                0);
+        }
+
+        EmitCommand(NaplpsCommandBuilder.BuildLineRelative(deltas, CurrentMv));
+
+        foreach (var d in deltas)
+        {
+            _pen += d;
+        }
     }
 
     private void EmitRectFilled(float w, float h)
@@ -1037,7 +1077,6 @@ public sealed class Compiler
             // Absolute pen sets — pen lands exactly at the decoded vertex.
             case NaplpsCommandBuilder.OpPointSetAbsolute & 0x7F:
             case NaplpsCommandBuilder.OpPointAbsolute & 0x7F:
-            case NaplpsCommandBuilder.OpLineAbsolute & 0x7F:
             {
                 if (operands.Count >= mv)
                 {
@@ -1047,14 +1086,37 @@ public sealed class Compiler
                 break;
             }
 
+            // LineAbsolute — a chained polyline (X3.110 5.3.3.2); pen ends at the LAST
+            // complete coordinate block, not the first.
+            case NaplpsCommandBuilder.OpLineAbsolute & 0x7F:
+            {
+                if (operands.Count >= mv)
+                {
+                    int lastStart = (operands.Count / mv - 1) * mv;
+                    var (x, y) = NaplpsEncoder.DecodeVertex2D(new NaplpsOperands(operands[lastStart..(lastStart + mv)]));
+                    _pen = new Vector3(x, y, 0);
+                }
+                break;
+            }
+
             // Relative pen offsets — pen advances by the decoded delta.
             case NaplpsCommandBuilder.OpPointSetRelative & 0x7F:
             case NaplpsCommandBuilder.OpPointRelative & 0x7F:
-            case NaplpsCommandBuilder.OpLineRelative & 0x7F:
             {
                 if (operands.Count >= mv)
                 {
                     var (dx, dy) = NaplpsEncoder.DecodeVertex2D(new NaplpsOperands(operands[0..mv]));
+                    _pen += new Vector3(dx, dy, 0);
+                }
+                break;
+            }
+
+            // LineRelative — chained deltas; pen advances by the sum of ALL complete blocks.
+            case NaplpsCommandBuilder.OpLineRelative & 0x7F:
+            {
+                for (int i = 0; i + mv <= operands.Count; i += mv)
+                {
+                    var (dx, dy) = NaplpsEncoder.DecodeVertex2D(new NaplpsOperands(operands[i..(i + mv)]));
                     _pen += new Vector3(dx, dy, 0);
                 }
                 break;

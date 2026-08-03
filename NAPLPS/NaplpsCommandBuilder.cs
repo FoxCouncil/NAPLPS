@@ -67,6 +67,12 @@ public static class NaplpsCommandBuilder
         return (OpLineAbsolute, NaplpsEncoder.EncodeVertex2D(x, y, multiByteValue));
     }
 
+    /// <summary>Draw a chained polyline through absolute positions in one LINE command (X3.110 5.3.3.2). Creates LineAbsoluteCommand.</summary>
+    public static (byte opcode, NaplpsOperands operands) BuildLineAbsolute(Vector3[] points, int multiByteValue = 3)
+    {
+        return (OpLineAbsolute, NaplpsEncoder.EncodeVertices2D(points, multiByteValue));
+    }
+
     /// <summary>Draw connected lines through absolute positions. Creates LineSetAbsoluteCommand.</summary>
     public static (byte opcode, NaplpsOperands operands) BuildLineSetAbsolute(Vector3[] points, int multiByteValue = 3)
     {
@@ -196,6 +202,12 @@ public static class NaplpsCommandBuilder
     public static (byte opcode, NaplpsOperands operands) BuildLineRelative(float dx, float dy, int multiByteValue = 3)
     {
         return (OpLineRelative, NaplpsEncoder.EncodeVertex2D(dx, dy, multiByteValue));
+    }
+
+    /// <summary>Draw a chained polyline through relative offsets in one LINE command (X3.110 5.3.3.2). Creates LineRelativeCommand.</summary>
+    public static (byte opcode, NaplpsOperands operands) BuildLineRelative(Vector3[] deltas, int multiByteValue = 3)
+    {
+        return (OpLineRelative, NaplpsEncoder.EncodeVertices2D(deltas, multiByteValue));
     }
 
     /// <summary>Draw a connected polyline through relative offsets. Creates LineSetRelativeCommand.</summary>

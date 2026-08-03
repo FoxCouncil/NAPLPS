@@ -184,17 +184,18 @@ public static class Decompiler
                 break;
             }
 
-            case LineAbsoluteCommand:
+            // LINE ABSOLUTE/RELATIVE — a series of coordinate blocks chained into a polyline
+            // (X3.110 5.3.3.2, issue #56). Emit every pair; single-block commands come out
+            // as the familiar `line x y` form.
+            case LineAbsoluteCommand when TryReconstructLineSet(cmd, stateBefore, out var linePts):
             {
-                var (x, y) = NaplpsEncoder.DecodeVertex2D(cmd.Operands);
-                yield return $"line {Fmt(x)} {Fmt(y)}";
+                yield return "line " + FormatPolygonArgs(linePts);
                 break;
             }
 
-            case LineRelativeCommand:
+            case LineRelativeCommand when TryReconstructLineSet(cmd, stateBefore, out var lineDeltas):
             {
-                var (dx, dy) = NaplpsEncoder.DecodeVertex2D(cmd.Operands);
-                yield return $"line-rel {Fmt(dx)} {Fmt(dy)}";
+                yield return "line-rel " + FormatPolygonArgs(lineDeltas);
                 break;
             }
 
