@@ -22,6 +22,30 @@ public class IncrementalPointTests
         return state;
     }
 
+    /// <summary>
+    /// Mode-0 direct color specifications interleave their bits G,R,B most-significant-
+    /// first, the same convention as SET COLOR operand bits - NOT three contiguous fields.
+    /// A 6-bit spec of 110100 is therefore G=11, R=10, B=00: full green, 2/3 red, no blue.
+    /// Verified through the drawable itself with a render probe.
+    /// </summary>
+    [TestMethod]
+    public void DirectColor_BitsInterleaveGrb()
+    {
+        var state = CreateState();
+        state.ColorMode = 0;
+
+        // Packing counter 6; spec bits 110100 packed into one string byte (b6..b1).
+        var cmd = new IncrementalPointCommand(state, 0x39, new NaplpsOperands([0x40 | 6, 0x40 | 0b110100]));
+        Assert.AreEqual(1, cmd.Deposits.Count);
+
+        using var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(64, 64);
+        new NAPLPS.Drawing.DrawableIncrementalPoint(cmd).Draw(image, state, new SixLabors.ImageSharp.Size(64, 64));
+
+        // The quarter-screen pel deposits at the drawing point (0,0) = bottom-left corner.
+        var px = image[2, 62];
+        Assert.AreEqual((170, 255, 0), (px.R, px.G, px.B), "g,r,b,g,r,b of 110100: R=10 -> 170, G=11 -> 255, B=00 -> 0");
+    }
+
     [TestMethod]
     public void PackingCounterZero_IsNullOperation()
     {

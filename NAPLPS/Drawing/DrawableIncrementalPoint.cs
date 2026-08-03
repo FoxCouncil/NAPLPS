@@ -58,19 +58,28 @@ public class DrawableIncrementalPoint : Drawable, IDrawable
     {
         if (state.ColorMode == 0)
         {
-            // Direct color: the packed bits are G,R,B three-tuples, first tuple = MSBs
-            // (5.3.3.6.3). Distribute the packing count across the three primaries.
-            int bitsPerChannel = Math.Max(1, bitsPerPixel / 3);
-            int maxValue = (1 << bitsPerChannel) - 1;
+            // Direct color: the specification's bits are G,R,B rounds interleaved
+            // most-significant-first - g,r,b,g,r,b... - the same convention SET COLOR's
+            // operand bits use (5.3.2.5.2). A packing count not divisible by three gives
+            // the leading channels one extra bit; each channel scales to full intensity
+            // over its own bit width.
+            int g = 0, r = 0, b = 0, gBits = 0, rBits = 0, bBits = 0;
 
-            int g = (colorValue >> (bitsPerChannel * 2)) & maxValue;
-            int r = (colorValue >> bitsPerChannel) & maxValue;
-            int b = colorValue & maxValue;
+            for (int i = 0; i < bitsPerPixel; i++)
+            {
+                int bit = (colorValue >> (bitsPerPixel - 1 - i)) & 1;
 
-            return ISColor.FromRgb(
-                (byte)(r * 255 / maxValue),
-                (byte)(g * 255 / maxValue),
-                (byte)(b * 255 / maxValue));
+                switch (i % 3)
+                {
+                    case 0: g = g << 1 | bit; gBits++; break;
+                    case 1: r = r << 1 | bit; rBits++; break;
+                    default: b = b << 1 | bit; bBits++; break;
+                }
+            }
+
+            static byte Scale(int v, int bits) => bits == 0 ? (byte)0 : (byte)(v * 255 / ((1 << bits) - 1));
+
+            return ISColor.FromRgb(Scale(r, rBits), Scale(g, gBits), Scale(b, bBits));
         }
 
         // Color modes 1 and 2, 1-bit packing: device-verified on the 8197_CHIEF capture,
