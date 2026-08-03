@@ -42,6 +42,16 @@ internal sealed class SpliceBinaryReader(Stream input) : BinaryReader(input, Sys
         InjectionCount++;
     }
 
+    /// <summary>
+    /// The pending injected bytes, oldest first. A resumable decoder saves these when an
+    /// attempt unwinds mid-expansion and re-injects them into the next attempt's reader,
+    /// so command boundaries inside an expansion stay committable.
+    /// </summary>
+    public byte[] SnapshotPending()
+    {
+        return _injected.GetRange(_cursor, _injected.Count - _cursor).ToArray();
+    }
+
     /// <summary>Drop all pending injected bytes (CAN terminates executing macros).</summary>
     public void ClearInjected()
     {
