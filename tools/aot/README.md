@@ -4,6 +4,8 @@ Nine small programs (C, C++, Rust, Python, Node.js, Go, Zig, PHP, Ruby) plus a S
 
 All ten produce a **byte-identical 6709-byte PNG** (MD5 `9a431be59694112d90d9e33297efbe46`) from the same `Examples/telidraw/hello.nap` input. The table below is exhaustive: toolchain, FFI mechanism, build command, runtime setup, and the size of each demo's source file.
 
+`c/ctx.c` is a separate smoke test for the stateful `naplps_ctx_*` API (split append, flush, stepped paint, draw_text, fill_rect, stroke_rect, command_count, reset); its build line is in its own header comment. The table below covers the render-to-PNG demos:
+
 | Language | Tested version | FFI mechanism | Compile step | Runtime setup | Demo LOC |
 |---|---|---|---|---|---|
 | **C** 🅒 | MSVC 14.44 (VS 2026) | Direct C ABI against `NAPLPS.lib` import library | `cl main.c ... NAPLPS.lib` via `build-msvc.ps1` | DLL next to `.exe` | 95 |
@@ -34,6 +36,7 @@ tools/aot/
   publish.ps1        - one-shot publish + import-lib copy
   c/
     main.c
+    ctx.c            - smoke test for the stateful naplps_ctx_* API
     build-msvc.ps1   - Windows MSVC build (verified)
     Makefile         - GCC / MinGW build
   cpp/
@@ -299,17 +302,17 @@ Error codes (negative return values):
 
 | Code | Meaning |
 |---|---|
-| -1 | Parse error or exception (context calls leave the context unchanged) |
+| -1 | Parse error or exception (a failed append settles to the last command boundary - see the failure model in naplps.h; stateless calls have no effect) |
 | -2 | Output buffer too small |
 | -3 | Invalid input (null pointer, non-positive length, bad argument or state) |
-| -4 | Stream exhausted (`naplps_ctx_exec_next` only; a status, not an error) |
+| -4 | Status, not an error: `exec_next` past the last command, `exec_to` before anything is paintable |
 | -5 | Bad context handle |
 
 The stateless functions are thread-safe: each call builds its own render state. Context handles are different: creating/destroying/looking up handles is safe from any thread, but a given context must not be used from two threads at the same time, and its framebuffer pointer is only coherent between the caller's own calls.
 
 ## Adding a new language binding ➕
 
-The ABI is standard C: plain `int32_t` returns, raw `uint8_t*` buffers, no callbacks, no manual memory allocation crossing the boundary (the only struct is the optional 4-int `NaplpsRect` out-parameter). Any language with a C FFI should work. `tools/aot/include/naplps.h` is the source of truth for signatures.
+The ABI is standard C: `int32_t` returns (plus the `intptr_t` context handle, the `const uint8_t*` framebuffer pointer, and two `void` teardown calls), raw `uint8_t*` buffers, no callbacks, no manual memory allocation crossing the boundary (the only struct is the optional 4-int `NaplpsRect` out-parameter). Any language with a C FFI should work. `tools/aot/include/naplps.h` is the source of truth for signatures.
 
 Strong candidates for further bindings:
 

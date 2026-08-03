@@ -1,4 +1,4 @@
-/* naplps.h — C header for the NAPLPS NativeAOT library.
+/* naplps.h - C header for the NAPLPS NativeAOT library.
  *
  * Link against NAPLPS.dll (Windows), libNAPLPS.so (Linux), or libNAPLPS.dylib
  * (macOS) produced by:
@@ -19,7 +19,8 @@
  *       is not transactional.
  *   -2  Output buffer too small. Call again with a larger buffer.
  *   -3  Invalid input (null pointer, non-positive length, bad argument or state).
- *   -4  Stream exhausted (naplps_ctx_exec_next only; a status, not an error).
+ *   -4  A status, not an error: naplps_ctx_exec_next past the last command, or
+ *       naplps_ctx_exec_to before anything is paintable.
  *   -5  Bad context handle.
  */
 
@@ -108,13 +109,19 @@ NAPLPS_IMPORT int32_t naplps_version(uint8_t* out_buf, int32_t out_buf_len);
  * by the next non-numeric byte and never by a length, so the last command of a complete
  * stream is byte-identical to a truncated one and only the caller knows which it is.
  * Call naplps_ctx_flush once a page is complete, or its final command may stay
- * unpainted. naplps_ctx_draw_text and naplps_ctx_fill_rect flush themselves.
+ * unpainted. naplps_ctx_draw_text, naplps_ctx_fill_rect and naplps_ctx_stroke_rect
+ * flush themselves.
  *
  * Failure model: an append decodes but does not paint, and the parse layer records
  * stream errors rather than failing the call, so a malformed stream leaves the
  * framebuffer untouched. An append is NOT transactional - it consumes bytes into live
- * decoder state as it goes and cannot be rolled back. A render failure (a library bug,
- * not a stream condition) surfaces from naplps_ctx_exec_to / naplps_ctx_exec_next and
+ * decoder state as it goes and cannot be rolled back. On an unexpected exception (-1)
+ * the context settles to the last command boundary; commands that append DID complete
+ * are retained but not yet reported - they are included in, and first painted after,
+ * the return count of the next successful naplps_ctx_append or naplps_ctx_flush, so
+ * per-call count deltas across a -1 do not attribute commands to the call that
+ * completed them.
+ * A render failure (a library bug, not a stream condition) surfaces from naplps_ctx_exec_to / naplps_ctx_exec_next and
  * may leave the framebuffer partially painted at the reported index.
  *
  * Caveat: mid-stream palette redefinition (generic NAPLPS CLUT animation) is applied
@@ -140,7 +147,8 @@ typedef intptr_t NaplpsCtx;
                                           * A window wanting an opaque backdrop draws a
                                           * filled rectangle. */
 
-/* Sentinel returned by naplps_ctx_exec_next when all commands are painted. */
+/* Status sentinel, not an error: exec_next when every available command is already
+ * painted; exec_to before anything is paintable. */
 #define NAPLPS_CTX_EXHAUSTED (-4)
 
 /* A changed-region report, in framebuffer pixels. */
@@ -175,7 +183,8 @@ NAPLPS_IMPORT int32_t   naplps_ctx_command_count(NaplpsCtx ctx);
 /* Paint the framebuffer up through (and including) cmd_index, clamped to the
  * stream end. Idempotent for already-painted commands. Returns -4 (a status, not an
  * error) when nothing has been painted yet. Otherwise returns the highest painted
- * index, -3 for a negative cmd_index, or a negative error code. */
+ * index, -3 for a negative cmd_index or before any append, or a negative error
+ * code. */
 NAPLPS_IMPORT int32_t   naplps_ctx_exec_to(NaplpsCtx ctx, int32_t cmd_index);
 
 /* Execute exactly one command (the next unpainted one). Optionally reports the
@@ -195,10 +204,13 @@ NAPLPS_IMPORT int32_t   naplps_ctx_exec_next(NaplpsCtx ctx, NaplpsRect* out_dirt
  *   fg, bg          palette indices 0-15 (clamped); bg < 0 emits the foreground-only
  *                   SELECT COLOR form
  *   char_w, char_h  character field size in normalized units, rounded to the wire
- *                   grid; < 0 keeps the current size. Passing a size also resets the
+ *                   grid; < 0 (including -Infinity) keeps the current size (both must be >= 0 for either
+ *                   to apply; NaN is rejected). Passing a size also resets the
  *                   TEXT attributes (spacing/path/rotation/interrow) to defaults.
  *   ascii           text bytes appended verbatim (0x20-0x7E; codes with DRCS
- *                   definitions render the custom glyphs)
+ *                   definitions render the custom glyphs). Bytes outside
+ *                   0x20-0x7E are appended as coded data and EXECUTE - do not
+ *                   pass controls in text.
  *
  * Independent of the decoder state it lands in, and neutral with respect to it: call it
  * over any prior stream at a COMMAND BOUNDARY, with no prefix bytes of your own -

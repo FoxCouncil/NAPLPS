@@ -11,9 +11,12 @@ namespace NAPLPS;
 /// and blit raw pixels without PNG round-trips. Semantics live on the session class;
 /// the C contract lives in tools/aot/include/naplps.h.
 ///
-/// Error codes: -1 exception/parse failure (the context is left unchanged - appends are
-/// transactional), -3 invalid argument or invalid state, -5 bad handle.
-/// naplps_ctx_exec_next returns -4 when the stream is exhausted (status, not an error).
+/// Error codes: -1 exception/parse failure (the context settles to the last command
+/// boundary: commands decoded before the failure stand, the unconsumed tail stays
+/// pending, a retry resumes from the boundary, and the settled commands are reported by
+/// the next successful append or flush - see naplps.h: appends are NOT transactional as
+/// a whole), -3 invalid argument or invalid state, -5 bad handle. -4 is a status, not
+/// an error: exec_next past the last command, exec_to before anything is paintable.
 ///
 /// Thread safety: the handle table is locked; a single context must not be used from
 /// multiple threads concurrently (one context per thread of use). The framebuffer
@@ -185,7 +188,8 @@ public static unsafe class NativeExportsCtx
     /// <summary>
     /// Paint up through (and including) cmd_index, clamped to the stream end. Idempotent
     /// for already-painted commands. Returns the highest painted index, or a negative
-    /// error code (-3 for a negative cmd_index).
+    /// error code (-3 for a negative cmd_index or before any append); -4 is the
+    /// nothing-paintable-yet status, not an error.
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_exec_to")]
     public static int ExecTo(nint handle, int cmdIndex)

@@ -26,7 +26,9 @@ namespace NAPLPS;
 /// Failure model: an append parses but does not paint, and the parse layer records stream
 /// errors rather than throwing, so a bad stream leaves the canvas untouched. A render failure
 /// (a library bug, not a stream condition) surfaces from exec_to / exec_next and may leave the
-/// surface partially painted at the reported command index.
+/// surface partially painted at the reported command index. If Append itself throws, the
+/// decoder settles to its last command boundary and the commands that append completed are
+/// returned by the next successful Append or Flush.
 ///
 /// Thread model: instances are not internally synchronized; use one session per thread
 /// or synchronize externally. A disposed session throws ObjectDisposedException from

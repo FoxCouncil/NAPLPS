@@ -3,7 +3,9 @@
  * Usage: ctx <file.nap>
  *
  * Appends the file in two chunks split mid-stream, flushes, steps every command, verifies
- * the framebuffer lights up, draws a field-text run, and resets. Exit 0 on success.
+ * the framebuffer lights up, paints a fill_rect cell block and a stroke_rect hairline
+ * (command_count checked against the returned totals), draws a field-text run, and
+ * resets. Exit 0 on success.
  *
  * Build (macOS):
  *   cc ctx.c -I ../include ../publish/NAPLPS.dylib -Wl,-rpath,$(pwd)/../publish -o ctx
@@ -70,6 +72,12 @@ int main(int argc, char** argv) {
         if (p[0] < 60 && p[1] > 120 && p[2] < 60) { green++; }
     }
     if (green < 200) { printf("fill_rect painted %ld green px (expected a cell block)\n", green); return 1; }
+
+    /* hairline focus border around the filled cell; command_count must track it */
+    int32_t sr = naplps_ctx_stroke_rect(ctx, 4 * 0.0234375, 0.25, 3 * 0.0234375, 0.14, 6);
+    if (sr <= fr) { printf("stroke_rect failed: %d\n", sr); return 1; }
+    if (naplps_ctx_command_count(ctx) != sr) { printf("command_count mismatch after stroke_rect\n"); return 1; }
+    if (naplps_ctx_exec_to(ctx, sr - 1) != sr - 1) { printf("exec_to after stroke_rect failed\n"); return 1; }
 
     const char* s = "FIELD TEXT";
     int32_t after = naplps_ctx_draw_text(ctx, 0.1, 0.1, 7, 3, 0.025, 0.0390625,
