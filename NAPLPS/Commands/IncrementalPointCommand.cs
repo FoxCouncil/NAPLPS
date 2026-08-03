@@ -3,8 +3,8 @@
 namespace NAPLPS.Commands;
 
 /// <summary>
-/// INCREMENTAL POINT (0x39) - Displays a color bitmap within the active field.
-/// Each pixel is drawn using one logical pel with the color specified in the bitmap.
+/// INCREMENTAL POINT - deposits a string of color specifications in a raster-sequential
+/// manner within the active field, one logical pel per specification (X3.110 5.3.3.6.3).
 /// </summary>
 [AddCommand(240, "Incremental Point", "Display a color bitmap within the active field, one pel per pixel.", Category = CommandCategory.Incremental, DslKeyword = "bitmap")]
 public class IncrementalPointCommand : NaplpsCommand
@@ -12,18 +12,26 @@ public class IncrementalPointCommand : NaplpsCommand
     public static new readonly NaplpsOperandType OperandType = NaplpsOperandType.FixedAndString;
 
     /// <summary>
-    /// Bits per pixel (1-48). If 0 or > 48, the command is discarded.
+    /// The packing counter (1-48): the number of consecutive bits taken from the string
+    /// operand to make up a single color specification. 0 or &gt;48 makes the whole command
+    /// a null operation (5.3.3.6.3).
     /// </summary>
     public int BitsPerPixel { get; }
 
     /// <summary>
-    /// The pixel data as a list of colors/palette indices.
+    /// The decoded pel deposits, in normalized coordinates. Each entry is the drawing point
+    /// of one deposit; the pel extends dx right/left and dy up/down from it per the signed
+    /// logical pel captured in <see cref="PelSize"/>. The raster walk (row capacity, the
+    /// end-of-row byte flush, the row step) depends on the active field, the logical pel,
+    /// and the drawing point at execution time, so it is resolved here at parse time where
+    /// that state is exact, not at render time.
     /// </summary>
-    public List<PixelData> Pixels { get; } = new();
+    public List<PelDeposit> Deposits { get; } = new();
 
-    /// <summary>
-    /// Whether the command is valid (BitsPerPixel in range 1-48).
-    /// </summary>
+    /// <summary>Signed logical pel (dx, dy) at execution time.</summary>
+    public Vector2 PelSize { get; }
+
+    /// <summary>Whether the command is valid (packing counter in range 1-48).</summary>
     public new bool IsValid { get; }
 
     public IncrementalPointCommand(NaplpsState state, byte opcode, NaplpsOperands operands) : base(state, opcode, operands)
@@ -34,8 +42,8 @@ public class IncrementalPointCommand : NaplpsCommand
             return;
         }
 
-        // First byte is the fixed format parameter describing bits per pixel
-        BitsPerPixel = operands[0] & 0x3F; // Lower 6 bits
+        // The first, fixed-format operand byte carries the packing counter in its low 6 bits.
+        BitsPerPixel = operands[0] & 0x3F;
 
         if (BitsPerPixel == 0 || BitsPerPixel > 48)
         {
@@ -44,95 +52,146 @@ public class IncrementalPointCommand : NaplpsCommand
         }
 
         IsValid = true;
+        PelSize = new Vector2(state.LogicalPel.X, state.LogicalPel.Y);
 
-        // Parse the pixel data from the remaining operands
-        // The data is a bitstring where each pixel uses BitsPerPixel bits
         if (operands.Count > 1)
         {
-            ParsePixelData(operands);
+            DecodeRaster(state, operands);
+        }
+
+        // 5.3.3.6.3 step 3: when the operation terminates, the drawing point is set to the
+        // origin of the active field.
+        if (state.Field.IsSet)
+        {
+            state.DrawingPoint = state.Field.Origin;
+            state.SyncAfterGraphicsMove();
         }
     }
 
-    private void ParsePixelData(NaplpsOperands operands)
+    /// <summary>
+    /// The 5.3.3.6.3 algorithm: deposits start at the current drawing point and advance one
+    /// signed pel width per color specification. When any portion of the pel would exceed
+    /// the active field in X, the REMAINING BITS OF THE CURRENT STRING BYTE ARE DISCARDED
+    /// (interpretation resumes at b6 of the next byte), the drawing point returns to the
+    /// opposite X boundary, and it steps one signed pel height in Y. Color specifications
+    /// are packed high-order-first across the 6 payload bits of each string byte without
+    /// regard to byte boundaries.
+    /// </summary>
+    private void DecodeRaster(NaplpsState state, NaplpsOperands operands)
     {
-        // Build a bit buffer from the operands (starting after the BitsPerPixel byte)
-        var bitBuffer = new List<bool>();
+        // The default active field is the unit screen (5.3.3.6.2).
+        float left = 0f, right = 1f, bottom = 0f, top = 1f;
 
-        for (int i = 1; i < operands.Count; i++)
+        if (state.Field.IsSet)
         {
-            byte b = operands[i];
-            // Each data byte has 6 usable bits (bits 0-5)
-            for (int bit = 5; bit >= 0; bit--)
-            {
-                bitBuffer.Add((b & (1 << bit)) != 0);
-            }
+            left = state.Field.Left;
+            right = state.Field.Right;
+            bottom = state.Field.Bottom;
+            top = state.Field.Top;
         }
 
-        // Parse pixels from the bit buffer
-        int bitIndex = 0;
-        while (bitIndex + BitsPerPixel <= bitBuffer.Count)
-        {
-            // Check for repositioning codes (first 2 bits)
-            if (bitIndex + 2 <= bitBuffer.Count)
-            {
-                int code = (bitBuffer[bitIndex] ? 2 : 0) + (bitBuffer[bitIndex + 1] ? 1 : 0);
+        float dx = PelSize.X;
+        float dy = PelSize.Y;
 
-                if (code == 0)
+        if (dx == 0 || dy == 0)
+        {
+            return;
+        }
+
+        float x = state.DrawingPoint.X;
+
+        // Rows walk from the drawing point in the pel's signed Y direction (5.3.3.6.3:
+        // "if dy is positive, the drawing point moves up") - the string data is encoded
+        // bottom-row-first for an upward pel. Device-verified on the 8197_CHIEF capture.
+        float y = state.DrawingPoint.Y;
+
+        // A pel at (x, y) occupies [x, x+dx] and [y, y+dy] with signs; it fits the field
+        // when no portion exceeds it. A half-pel epsilon absorbs float accumulation over
+        // the hundreds of column steps of a row.
+        float epsX = Math.Abs(dx) / 2f;
+        bool FitsX(float px) => dx > 0 ? px + dx <= right + epsX : px + dx >= left - epsX;
+
+        // Bit cursor over the string operand's 6-bit payloads, high bit (b6) first.
+        int byteIndex = 1;
+        int bitInByte = 0; // 0..5, counted from b6 down to b1
+
+        int ReadBit()
+        {
+            if (byteIndex >= operands.Count)
+            {
+                return -1;
+            }
+
+            int bit = (operands[byteIndex] >> (5 - bitInByte)) & 1;
+
+            if (++bitInByte == 6)
+            {
+                bitInByte = 0;
+                byteIndex++;
+            }
+
+            return bit;
+        }
+
+        while (true)
+        {
+            if (!FitsX(x))
+            {
+                // End of row: discard the rest of the current byte, return to the opposite
+                // X boundary, and step one pel height. A Y overflow scrolls the field on a
+                // real terminal (5.3.3.6.3 step 3); a static image render holds the row
+                // instead, which only matters for content taller than its field.
+                if (bitInByte != 0)
                 {
-                    // 00 = end of bitmap
+                    bitInByte = 0;
+                    byteIndex++;
+                }
+
+                if (byteIndex >= operands.Count)
+                {
                     break;
                 }
-                else if (code == 1 || code == 2 || code == 3)
+
+                x = dx > 0 ? left : right;
+
+                float nextY = y + dy;
+                bool fitsY = nextY >= bottom - epsX && nextY + Math.Abs(dy) <= top + epsX;
+                if (fitsY)
                 {
-                    // Repositioning: 01=dy, 10=dx, 11=dx+dy
-                    // For now, we'll handle these as special markers
-                    var pixel = new PixelData
-                    {
-                        IsRepositioning = true,
-                        RepositionCode = code
-                    };
-
-                    // Read the offset values based on domain single-byte width
-                    // This is simplified - full implementation would parse dx/dy values
-                    bitIndex += 2;
-
-                    if (code == 1 || code == 3) // dy
-                    {
-                        // Skip dy bits
-                        bitIndex += 6;
-                    }
-                    if (code == 2 || code == 3) // dx
-                    {
-                        // Skip dx bits
-                        bitIndex += 6;
-                    }
-
-                    Pixels.Add(pixel);
-                    continue;
+                    y = nextY;
                 }
             }
 
-            // Extract pixel color value
-            int colorValue = 0;
-            for (int b = 0; b < BitsPerPixel && bitIndex < bitBuffer.Count; b++)
+            int color = 0;
+            bool ok = true;
+
+            for (int b = 0; b < BitsPerPixel; b++)
             {
-                colorValue = (colorValue << 1) | (bitBuffer[bitIndex++] ? 1 : 0);
+                int bit = ReadBit();
+
+                if (bit < 0)
+                {
+                    ok = false;
+                    break;
+                }
+
+                color = (color << 1) | bit;
             }
 
-            Pixels.Add(new PixelData
+            if (!ok)
             {
-                IsRepositioning = false,
-                ColorValue = colorValue
-            });
+                break;
+            }
+
+            Deposits.Add(new PelDeposit { X = x, Y = y, ColorValue = color });
+            x += dx;
         }
     }
 
-    public struct PixelData
+    public struct PelDeposit
     {
-        public bool IsRepositioning { get; set; }
-        public int RepositionCode { get; set; } // 1=dy, 2=dx, 3=dx+dy
+        public float X { get; set; }
+        public float Y { get; set; }
         public int ColorValue { get; set; }
-        public int DeltaX { get; set; }
-        public int DeltaY { get; set; }
     }
 }

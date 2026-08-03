@@ -59,5 +59,9 @@ public class IncrementalFieldCommand : GeometricDrawingCommandBase
             pen.Y = Origin.Y + Math.Abs(Dimensions.Y);
             state.Pen = pen;
         }
+
+        // 5.3.3.6.2 sets the DRAWING POINT, not just the text cursor - INCREMENTAL POINT
+        // rasters from the drawing point, so a stale unsynced value skews the whole bitmap.
+        state.SyncAfterTextMove();
     }
 }
