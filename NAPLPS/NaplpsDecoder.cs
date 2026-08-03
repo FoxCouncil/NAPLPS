@@ -151,6 +151,17 @@ public sealed class NaplpsDecoder
     {
         var emitted = new List<NaplpsSequence>();
 
+        // Commands a failed attempt settled but never delivered - the exception preempted
+        // the return value while their state mutations and consumed bytes stood. They belong
+        // to the caller, so the next decode leads with them; losing them would make a
+        // consumer painting from returned commands skip them forever.
+        if (_settledUndelivered is { Count: > 0 })
+        {
+            emitted.AddRange(_settledUndelivered);
+        }
+
+        _settledUndelivered = null;
+
         // A saved expansion tail counts as pending input even when no real bytes are:
         // it must decode on the next attempt (or be released by Flush), never dropped.
         if (_pending.Count == 0 && _savedInjected is not { Length: > 0 })
@@ -190,8 +201,9 @@ public sealed class NaplpsDecoder
         _streamingReader = reader;
         _atStreamEnd = atStreamEnd;
         _committedPosition = 0;
-        _committedCommandCount = 0;
+        _committedCommandCount = emitted.Count;   // a re-delivered prefix is already settled
         _committedInjected = null;
+        _shiftAtBoundary = State.PendingSingleShift;   // the attempt starts AT a boundary
 
         try
         {
@@ -208,6 +220,28 @@ public sealed class NaplpsDecoder
             }
 
             _savedInjected = _committedInjected;
+        }
+        catch
+        {
+            // Any unexpected exception must not desynchronize the context: settle to the
+            // last committed boundary exactly as a deferral does - commands and state up to
+            // the boundary stand, the unconsumed tail stays pending for a retry, and a
+            // mid-expansion queue snapshot is preserved. The exception still propagates,
+            // but the context remains boundary-consistent.
+            if (emitted.Count > _committedCommandCount)
+            {
+                emitted.RemoveRange(_committedCommandCount, emitted.Count - _committedCommandCount);
+            }
+
+            // The settled prefix cannot reach the caller through a throw; stash it so the
+            // next decode delivers it. And a single shift consumed by the aborted command
+            // goes back, exactly as the deferral unwind in ReadStream puts it back.
+            _settledUndelivered = emitted.Count > 0 ? emitted : null;
+            State.PendingSingleShift = _shiftAtBoundary;
+
+            _savedInjected = _committedInjected;
+            _pending.RemoveRange(0, (int)_committedPosition);
+            throw;
         }
         finally
         {
@@ -249,6 +283,9 @@ public sealed class NaplpsDecoder
 
     /// <summary>Injected macro-body bytes to restore into the next attempt's reader.</summary>
     private byte[]? _savedInjected;
+
+    /// <summary>Commands settled by an attempt that ended in a throw; see the Decode catch.</summary>
+    private List<NaplpsSequence>? _settledUndelivered;
 
     /// <summary>
     /// A pending SS2/SS3 single-shift is consumed by <see cref="NaplpsState.ResolveByte"/> before
