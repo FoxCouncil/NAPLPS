@@ -1,5 +1,6 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
+using System.Runtime.ExceptionServices;
 using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.Processing;
 
@@ -17,6 +18,13 @@ namespace NAPLPS;
 /// and every per-command state snapshot so the whole stream can be re-rendered or edited) and
 /// <see cref="NaplpsStreamSession"/> (the runtime - retains nothing and renders at the decode
 /// frontier). Neither distinction reaches this class; there is no mode flag here.
+///
+/// The parse core is one long-running async method over a <see cref="ByteSource"/>. On the
+/// wire path a read that outruns the received bytes SUSPENDS the parser in place - locals,
+/// operand accumulators and splice queue intact - and the next <see cref="Feed"/> resumes it
+/// at the exact await point, inline on the caller's thread. On the one-shot path the source
+/// is complete and ended from the start, so the same code never suspends and the public
+/// <see cref="ReadStream"/> wrapper completes synchronously.
 ///
 /// See docs/plans/streaming-decode-and-surface-model.md.
 /// </summary>
@@ -38,69 +46,29 @@ public sealed class NaplpsDecoder
 
     private const int MaxDrcsRecursionDepth = 4;
 
-    /// <summary>
-    /// Bytes handed to <see cref="Feed"/> that no complete command has claimed yet: the live
-    /// segment is <see cref="_pending"/>[<see cref="_pendingStart"/> ..+ <see cref="_pendingCount"/>].
-    /// Feeds append into spare capacity and consuming a committed prefix advances the start
-    /// offset, so buffer bookkeeping is O(1) amortized per byte - no per-feed copy, no shift.
-    /// The array is compacted only when a dead prefix would otherwise force it to grow.
-    /// </summary>
-    private byte[] _pending = [];
+    /// <summary>The wire path's byte substrate: created on the first Feed/Flush, replaced
+    /// when a completed (flushed) stream is fed again.</summary>
+    private ByteSource? _source;
 
-    private int _pendingStart;
+    /// <summary>The suspended-or-running parse over <see cref="_source"/>. Completed
+    /// successfully = the stream was flushed to its end; faulted = the decoder is dead.</summary>
+    private Task? _parseLoop;
 
-    private int _pendingCount;
+    /// <summary>The live sink the wire-path parse emits into; harvested per Feed/Flush.</summary>
+    private readonly List<NaplpsSequence> _emitted = [];
 
-    /// <summary>
-    /// The reader over <see cref="_pending"/> while a <see cref="Feed"/> or <see cref="Flush"/>
-    /// is in flight. Deferral applies to this reader ONLY: macro bodies, DEFP expansions and
-    /// DRCS definitions decode from their own complete buffers, where end-of-buffer is real.
-    /// </summary>
-    private BinaryReader? _streamingReader;
+    /// <summary>Real-stream position just past the last complete command.</summary>
+    private long _boundaryPosition;
 
-    /// <summary>Position in <see cref="_streamingReader"/> just past the last complete command.</summary>
-    private long _committedPosition;
+    /// <summary>True from the top of each parse iteration until the opcode byte is consumed:
+    /// a parser suspended with this set is BETWEEN commands, not inside one.</summary>
+    private bool _atCommandBoundary = true;
 
-    /// <summary>Set by <see cref="Flush"/>: no more bytes are coming, so nothing is ambiguous.</summary>
-    private bool _atStreamEnd;
+    /// <summary>The unexpected exception that killed the parse, if any; see <see cref="Feed"/>.</summary>
+    private ExceptionDispatchInfo? _fault;
 
     /// <summary>Bytes received but not yet resolved into a complete command.</summary>
-    public int PendingByteCount => _pendingCount;
-
-    /// <summary>Appends bytes to the live pending segment, growing or compacting as needed.</summary>
-    private void PendingAppend(ReadOnlySpan<byte> bytes)
-    {
-        if (_pendingStart + _pendingCount + bytes.Length > _pending.Length)
-        {
-            if (_pendingCount + bytes.Length <= _pending.Length)
-            {
-                // The live bytes plus the new ones fit once the dead prefix is dropped.
-                Array.Copy(_pending, _pendingStart, _pending, 0, _pendingCount);
-            }
-            else
-            {
-                var grown = new byte[Math.Max(_pending.Length * 2, _pendingCount + bytes.Length)];
-                Array.Copy(_pending, _pendingStart, grown, 0, _pendingCount);
-                _pending = grown;
-            }
-
-            _pendingStart = 0;
-        }
-
-        bytes.CopyTo(_pending.AsSpan(_pendingStart + _pendingCount));
-        _pendingCount += bytes.Length;
-    }
-
-    /// <summary>Releases a consumed prefix of the live pending segment.</summary>
-    private void PendingConsume(int count)
-    {
-        _pendingStart += count;
-        _pendingCount -= count;
-        if (_pendingCount == 0)
-        {
-            _pendingStart = 0;
-        }
-    }
+    public int PendingByteCount => _source is null ? 0 : (int)(_source.TotalWritten - _boundaryPosition);
 
     public NaplpsDecoder(NaplpsState state)
     {
@@ -144,242 +112,170 @@ public sealed class NaplpsDecoder
     }
 
     /// <summary>
-    /// Raised when the streaming reader runs out of bytes at a point where the bytes still to
-    /// come could change the decode. Unwinds to the last complete command boundary; the partial
-    /// command's bytes stay in <see cref="_pending"/> and are re-decoded on the next feed.
+    /// True when a partial command is waiting on bytes still to come - the parser is
+    /// suspended inside a command (whether the bytes it consumed so far came from the
+    /// pending buffer or a spliced macro body), or received bytes are not yet resolved
+    /// into a complete command. A caller must not append bytes of its own devising over
+    /// either: they would splice into the partial command.
     /// </summary>
-    private sealed class NeedMoreDataException : Exception;
-
-    /// <summary>
-    /// Signals a truncated tail on the streaming reader. A no-op on any other reader, and a
-    /// no-op once <see cref="Flush"/> has declared the stream finished.
-    /// </summary>
-    private void NeedMoreData(BinaryReader reader)
-    {
-        if (!_atStreamEnd && ReferenceEquals(reader, _streamingReader))
-        {
-            throw new NeedMoreDataException();
-        }
-    }
-
-    /// <summary>
-    /// True when a partial command is waiting on bytes still to come - whether its bytes
-    /// sit in the pending buffer or, for a deferred macro expansion whose real bytes were
-    /// all consumed, in the saved injection tail. A caller must not append bytes of its
-    /// own devising over either: they would splice into the partial command.
-    /// </summary>
-    public bool HasDeferredTail => _pendingCount > 0 || _savedInjected is { Length: > 0 };
-
-    private static long Remaining(BinaryReader reader) =>
-        reader.BaseStream.Length - reader.BaseStream.Position
-        + (reader is SpliceBinaryReader s ? s.InjectedRemaining : 0);
+    public bool HasDeferredTail => (_parseLoop is { IsCompleted: false } && !_atCommandBoundary) || PendingByteCount > 0;
 
     /// <summary>
     /// Feeds coded bytes and returns the commands that became complete. A command whose operand
-    /// list or trailing operand bytes run to the end of what has arrived is DEFERRED, not
+    /// list or trailing operand bytes run to the end of what has arrived is WITHHELD, not
     /// guessed at: an X3.110 operand list is terminated by the next non-numeric byte, so a
     /// complete command ending at the frontier is byte-identical to a truncated one and the
-    /// difference is undetectable in principle. Its bytes are held and re-decoded on the next
-    /// feed, exactly as MVDI's PLPDecode returns "internal decode in progress".
+    /// difference is undetectable in principle. The parser suspends at that exact read and the
+    /// next feed resumes it there, exactly as MVDI's PLPDecode returns "internal decode in
+    /// progress" - no byte is ever parsed twice.
+    ///
+    /// Failure model: an unexpected exception mid-parse FAULTS the decoder - the parse cannot
+    /// be resumed, the call rethrows the exception, and every subsequent Feed/Flush throws an
+    /// InvalidOperationException naming the original fault. Recover by creating a new decoder
+    /// (or resetting the owning session). No known wire input throws; the parse layer records
+    /// stream errors instead.
     /// </summary>
     public List<NaplpsSequence> Feed(ReadOnlySpan<byte> bytes)
     {
+        ThrowIfFaulted();
+        EnsureParseLoop();
+
         if (!bytes.IsEmpty)
         {
-            PendingAppend(bytes);
+            _source!.Append(bytes);
         }
 
-        return Decode(atStreamEnd: false);
+        return ResumeParse();
     }
 
     /// <summary>
-    /// Declares the stream finished: decodes whatever is pending without deferring, so a
-    /// command that ends at the last byte is emitted rather than held. This is the only
-    /// difference between the file path and the wire path, and the DRIVER decides it - the
-    /// decode rules themselves never branch on which consumer is asking.
+    /// Declares the stream finished: the parser runs to the true end without suspending, so a
+    /// command that ends at the last byte is emitted rather than held, and open definition
+    /// buffers are released. This is the only difference between the file path and the wire
+    /// path, and the DRIVER decides it - the decode rules themselves never branch on which
+    /// consumer is asking. The decoder remains usable: a later Feed starts a fresh stream over
+    /// the same live state.
     /// </summary>
-    public List<NaplpsSequence> Flush() => Decode(atStreamEnd: true);
-
-    private List<NaplpsSequence> Decode(bool atStreamEnd)
+    public List<NaplpsSequence> Flush()
     {
-        var emitted = new List<NaplpsSequence>();
+        ThrowIfFaulted();
+        EnsureParseLoop();
 
-        // Commands a failed attempt settled but never delivered - the exception preempted
-        // the return value while their state mutations and consumed bytes stood. They belong
-        // to the caller, so the next decode leads with them; losing them would make a
-        // consumer painting from returned commands skip them forever.
-        if (_settledUndelivered is { Count: > 0 })
-        {
-            emitted.AddRange(_settledUndelivered);
-        }
+        _source!.SetEnd();
 
-        _settledUndelivered = null;
-
-        // A saved expansion tail counts as pending input even when no real bytes are:
-        // it must decode on the next attempt (or be released by Flush), never dropped.
-        if (_pendingCount == 0 && _savedInjected is not { Length: > 0 })
-        {
-            // Even with no bytes pending, declaring the stream over must settle definition
-            // buffers whose bytes were consumed in earlier feeds - the one-shot path flushes
-            // an unterminated definition at EOF and the wire path must match.
-            if (atStreamEnd)
-            {
-                FlushOpenDefinitionBuffers(emitted);
-            }
-
-            return emitted;
-        }
-
-        // Read the live pending segment in place: the stream is scoped to this attempt and
-        // the buffer cannot move under it (no reentrant Feed), so no copy is taken.
-        using var stream = new MemoryStream(_pending, _pendingStart, _pendingCount, writable: false);
-
-        // The wire path splices macro expansions exactly like the one-shot path (X3.110
-        // 5.5): equivalence between Feed and FromBytes is the contract the corpus gate
-        // holds. The splice queue lives and dies with this attempt; expansions replay
-        // whole on re-decode because no command boundary is committed mid-expansion.
-        using var reader = new SpliceBinaryReader(stream);
-
-        // Resume a macro expansion interrupted by an earlier truncated tail: the saved
-        // injected bytes go back to the front of the queue, making mid-expansion command
-        // boundaries committable like any other (nothing is ever re-executed, so state
-        // mutations from already-emitted expansion commands are never double-applied).
-        if (_savedInjected is { Length: > 0 })
-        {
-            reader.InjectFront(_savedInjected);
-        }
-
-        _savedInjected = null;
-
-        _streamingReader = reader;
-        _atStreamEnd = atStreamEnd;
-        _committedPosition = 0;
-        _committedCommandCount = emitted.Count;   // a re-delivered prefix is already settled
-        _committedInjected = null;
-        _shiftAtBoundary = State.PendingSingleShift;   // the attempt starts AT a boundary
-
-        try
-        {
-            ReadStream(reader, sink: emitted);
-        }
-        catch (NeedMoreDataException)
-        {
-            // The tail is a partial command; it stays pending. The defer discipline throws
-            // before anything is emitted or state is mutated, so the sink trim is a no-op
-            // safety net. A mid-expansion unwind saves the injection queue for resumption.
-            if (emitted.Count > _committedCommandCount)
-            {
-                emitted.RemoveRange(_committedCommandCount, emitted.Count - _committedCommandCount);
-            }
-
-            _savedInjected = _committedInjected;
-        }
-        catch
-        {
-            // Any unexpected exception must not desynchronize the context: settle to the
-            // last committed boundary exactly as a deferral does - commands and state up to
-            // the boundary stand, the unconsumed tail stays pending for a retry, and a
-            // mid-expansion queue snapshot is preserved. The exception still propagates,
-            // but the context remains boundary-consistent.
-            if (emitted.Count > _committedCommandCount)
-            {
-                emitted.RemoveRange(_committedCommandCount, emitted.Count - _committedCommandCount);
-            }
-
-            // The settled prefix cannot reach the caller through a throw; stash it so the
-            // next decode delivers it. And a single shift consumed by the aborted command
-            // goes back, exactly as the deferral unwind in ReadStream puts it back.
-            _settledUndelivered = emitted.Count > 0 ? emitted : null;
-            State.PendingSingleShift = _shiftAtBoundary;
-
-            _savedInjected = _committedInjected;
-            PendingConsume((int)_committedPosition);
-            throw;
-        }
-        finally
-        {
-            _streamingReader = null;
-            _atStreamEnd = false;
-        }
-
-        PendingConsume(atStreamEnd ? _pendingCount : (int)_committedPosition);
-
-        return emitted;
+        return ResumeParse();
     }
 
-    /// <summary>
-    /// Records the current position as a command boundary, for unwinding - together with how
-    /// many commands the sink held, so an aborted attempt can also retract sequences emitted
-    /// past the boundary (a spliced macro expansion that must replay whole).
-    /// </summary>
-    private void Commit(BinaryReader reader, int commandCount)
+    private void ThrowIfFaulted()
     {
-        if (ReferenceEquals(reader, _streamingReader))
+        if (_fault is not null)
         {
-            _committedPosition = reader.BaseStream.Position;
-            _committedCommandCount = commandCount;
-            _shiftAtBoundary = State.PendingSingleShift;
-
-            // The boundary's injection-queue snapshot: an abort resumes from HERE, and the
-            // aborted attempt may have consumed queue bytes for the partial command. Null
-            // (the overwhelmingly common empty case) costs nothing per command.
-            _committedInjected = reader is SpliceBinaryReader { HasInjected: true } s
-                ? s.SnapshotPending()
-                : null;
+            throw new InvalidOperationException(
+                $"the decoder faulted on an earlier {_fault.SourceException.GetType().Name}: {_fault.SourceException.Message}; create a new decoder (or reset the session) to recover",
+                _fault.SourceException);
         }
     }
 
-    private int _committedCommandCount;
+    /// <summary>Stands up the wire-path source and parse loop, or replaces them after a
+    /// completed (flushed) stream: the decoder's live state carries across, so a fresh loop
+    /// over a fresh source continues the session exactly where the flush left it.</summary>
+    private void EnsureParseLoop()
+    {
+        if (_parseLoop is null || _parseLoop.IsCompletedSuccessfully)
+        {
+            _source = new ByteSource(canSplice: true);
+            _boundaryPosition = 0;
+            _atCommandBoundary = true;
+            _parseLoop = RunParseLoopAsync(_source);
+        }
+    }
 
-    /// <summary>Injection queue as of the last committed boundary, for resumption.</summary>
-    private byte[]? _committedInjected;
+    private async Task RunParseLoopAsync(ByteSource source)
+    {
+        await ReadStreamAsync(source, isMacroExpansion: false, sink: _emitted);
+    }
 
-    /// <summary>Injected macro-body bytes to restore into the next attempt's reader.</summary>
-    private byte[]? _savedInjected;
+    /// <summary>Resumes the suspended parser inline and harvests what it completed.</summary>
+    private List<NaplpsSequence> ResumeParse()
+    {
+        _source!.Resume();
 
-    /// <summary>Commands settled by an attempt that ended in a throw; see the Decode catch.</summary>
-    private List<NaplpsSequence>? _settledUndelivered;
+        if (_parseLoop!.IsFaulted)
+        {
+            _fault = ExceptionDispatchInfo.Capture(_parseLoop.Exception!.InnerException ?? _parseLoop.Exception);
+            _emitted.Clear();
+            _fault.Throw();
+        }
 
-    /// <summary>
-    /// A pending SS2/SS3 single-shift is consumed by <see cref="NaplpsState.ResolveByte"/> before
-    /// the operand list is read, so an attempt aborted in the operands must put it back or the
-    /// re-decode resolves the same byte through the wrong G-set. The two supplementary-resolution
-    /// flags need no restoring: ResolveByte recomputes both, and nothing reads them in between.
-    /// </summary>
-    private NaplpsState.GsetSlot? _shiftAtBoundary;
+        var completed = new List<NaplpsSequence>(_emitted);
+        _emitted.Clear();
+
+        return completed;
+    }
 
     private void RecordError(NaplpsErrorSeverity severity, NaplpsErrorType type, string message, byte? opcode = null, long? streamPosition = null)
     {
         State.RecordError(severity, type, message, opcode, streamPosition);
     }
 
+    /// <summary>
+    /// One-shot facade over the async parse core: reads the remainder of the reader into a
+    /// complete, pre-ended source and parses it in a single synchronous pass. A
+    /// <see cref="SpliceBinaryReader"/> marks the top-level coded stream, where macro
+    /// invocations splice their bodies at the invocation byte (X3.110 5.5); any other reader
+    /// parses as an isolated sub-stream with recursive macro expansion.
+    /// </summary>
     public List<NaplpsSequence> ReadStream(BinaryReader reader, bool isMacroExpansion = false, List<NaplpsSequence>? sink = null)
     {
+        var stream = reader.BaseStream;
+        var remaining = checked((int)(stream.Length - stream.Position));
+        var bytes = new byte[remaining];
+        stream.ReadExactly(bytes);
+
+        return RunCompleteParse(ByteSource.FromBuffer(bytes, canSplice: reader is SpliceBinaryReader), isMacroExpansion, sink);
+    }
+
+    /// <summary>Runs the parse core over a complete, pre-ended source. Every await over such
+    /// a source completes synchronously, so the parse cannot suspend; anything else is a bug.</summary>
+    private List<NaplpsSequence> RunCompleteParse(ByteSource source, bool isMacroExpansion = false, List<NaplpsSequence>? sink = null)
+    {
+        var parse = ReadStreamAsync(source, isMacroExpansion, sink);
+
+        if (!parse.IsCompleted)
+        {
+            throw new InvalidOperationException("a parse over a complete buffer suspended; the source was not ended");
+        }
+
+        return parse.GetAwaiter().GetResult();
+    }
+
+    private async ValueTask<List<NaplpsSequence>> ReadStreamAsync(ByteSource source, bool isMacroExpansion = false, List<NaplpsSequence>? sink = null)
+    {
         var commands = sink ?? [];
-        var splice = reader as SpliceBinaryReader;
+
+        // Only the live wire-path source keeps the boundary bookkeeping (PendingByteCount,
+        // HasDeferredTail, prefix release); sub-parses and one-shots read isolated buffers.
+        var streaming = ReferenceEquals(source, _source);
 
         // Expansion sequences render but are not coded input; commands materialized while the
         // opcode byte came from a spliced macro body are marked synthetic after the fact.
-        static void MarkSynthetic(List<NaplpsSequence> list, int fromIndex)
-        {
-            for (var i = fromIndex; i < list.Count; i++)
-            {
-                list[i].IsSynthetic = true;
-            }
-        }
 
         try
         {
-            while (!reader.IsEOF())
+            while (true)
             {
-                // Every iteration begins at a command boundary; record it so a truncated tail
-                // can unwind here. An aborted attempt emits nothing past the boundary, so
-                // `commands` always holds exactly the commands that completed. Boundaries
-                // inside a macro expansion commit too - the injection queue survives an
-                // unwind (see Decode), so the expansion resumes rather than replays.
-                Commit(reader, commands.Count);
+                // Every iteration begins at a command boundary. On the wire path, record it:
+                // everything before it is resolved (and its retention released), everything
+                // after it belongs to a command still in flight. A suspension between here
+                // and the opcode read is a parser at rest BETWEEN commands.
+                if (streaming)
+                {
+                    _boundaryPosition = source.RealPosition;
+                    _atCommandBoundary = true;
+                    source.ReleaseBefore(_boundaryPosition);
+                }
 
-                // ANSI X3.110 §6.1.6.3: CAN terminates currently executing macros immediately.
+                // ANSI X3.110 section 6.1.6.3: CAN terminates currently executing macros immediately.
                 // Only check inside macro expansion; at top level CAN is a no-op (the flag
                 // is cleared by the outer call when it returns).
                 if (isMacroExpansion && State.IsCancelRequested)
@@ -388,16 +284,25 @@ public sealed class NaplpsDecoder
                     break;
                 }
 
+                if (await source.IsEofAsync())
+                {
+                    break;
+                }
+
                 // Byte-provenance snapshot: whether this command's opcode comes from a spliced
                 // macro body, and how far along the real stream and the injection queue are.
                 // The deltas after the command parses attribute its bytes to body vs stream.
-                bool opcodeInjected = splice?.HasInjected == true;
-                long injectedBefore = splice?.InjectedConsumed ?? 0;
-                long injectionsBefore = splice?.InjectionCount ?? 0;
-                long realStart = splice != null ? reader.BaseStream.Position : 0;
-                int commandsBefore = commands.Count;
+                bool opcodeInjected = source.CanSplice && source.HasInjected;
+                long injectedBefore = source.InjectedConsumed;
+                long injectionsBefore = source.InjectionCount;
+                long realStart = source.RealPosition;
 
-                var opcode = reader.ReadByte();
+                var opcode = source.ReadByte();
+
+                if (streaming)
+                {
+                    _atCommandBoundary = false;
+                }
 
                 // We operate in 7 bit mode until we get 8 bits,
                 // once switched, we can't go back to 7 bit mode.
@@ -407,13 +312,8 @@ public sealed class NaplpsDecoder
                 }
 
                 // Buffered modes: macro/DRCS/texture definition consume bytes until END
-                if (HandleBufferedByte(opcode, reader, commands))
+                if (await HandleBufferedByteAsync(opcode, source, commands, opcodeInjected))
                 {
-                    if (opcodeInjected)
-                    {
-                        MarkSynthetic(commands, commandsBefore);
-                    }
-
                     continue;
                 }
 
@@ -429,16 +329,16 @@ public sealed class NaplpsDecoder
                     // everything the expansion produces is presentation output, marked synthetic.
                     commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, opcode, [])) { IsSynthetic = opcodeInjected });
 
-                    if (splice != null)
+                    if (source.CanSplice)
                     {
                         // Splice the body into the coded stream at the invocation byte (5.5).
                         // Operands may then flow across the boundary in both directions: a body
                         // ending in a bare opcode draws its operands from the bytes following
                         // the invocation, and a body beginning with numeric data extends the
-                        // command preceding it (see ReadOperands).
+                        // command preceding it (see ReadOperandsAsync).
                         if (State.Macros.TryGetValue((char)opcode, out var macroBody) && macroBody.Length > 0)
                         {
-                            splice.InjectFront(macroBody);
+                            source.InjectFront(macroBody);
                         }
                     }
                     else
@@ -456,7 +356,7 @@ public sealed class NaplpsDecoder
 
                 if (commandReference == null)
                 {
-                    RecordError(NaplpsErrorSeverity.Error, NaplpsErrorType.UnknownOpcode, "Unknown opcode in InUseTable", opcode, reader.BaseStream.Position - 1);
+                    RecordError(NaplpsErrorSeverity.Error, NaplpsErrorType.UnknownOpcode, "Unknown opcode in InUseTable", opcode, source.RealPosition - 1);
                     // Preserve the unknown byte so ToBytes round-trips. The renderer won't
                     // draw it (not IDrawable), but the byte survives serialization.
                     commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, opcode, [])) { IsSynthetic = opcodeInjected });
@@ -465,13 +365,13 @@ public sealed class NaplpsDecoder
 
                 var commandType = commandReference.CommandType ?? typeof(NaplpsCommand);
                 var commandParameters = commandReference.Parameters;
-                var additionalParameters = ReadOperands(reader, commandReference.OperandType);
+                var additionalParameters = await ReadOperandsAsync(source, commandReference.OperandType);
 
                 if (commandReference.CommandType == typeof(NumericalDataCommand))
                 {
-                    RecordError(NaplpsErrorSeverity.Warning, NaplpsErrorType.UnknownOpcode, "NumericalDataCommand reached unexpectedly", opcode, reader.BaseStream.Position);
+                    RecordError(NaplpsErrorSeverity.Warning, NaplpsErrorType.UnknownOpcode, "NumericalDataCommand reached unexpectedly", opcode, source.RealPosition);
                     // Preserve the orphan byte as a bare NaplpsCommand so it round-trips
-                    // through ToBytes() — historically these bytes (e.g. 0x41 in card1.nap
+                    // through ToBytes() - historically these bytes (e.g. 0x41 in card1.nap
                     // after ESC D) were silently dropped, breaking byte-level round-trip.
                     commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, opcode, [])) { IsSynthetic = opcodeInjected });
                     continue;
@@ -482,14 +382,7 @@ public sealed class NaplpsDecoder
 
                 if (commandType == typeof(ControlCommand) && commandParameters.Count == 1)
                 {
-                    HandleControlCommand((NaplpsControlCommands)commandParameters[0], reader, additionalParameters, commands);
-
-                    // Sequences the handler materialized (e.g. DEFP replay) inside an
-                    // expansion are presentation output like the rest of the expansion.
-                    if (opcodeInjected)
-                    {
-                        MarkSynthetic(commands, commandsBefore);
-                    }
+                    await HandleControlCommandAsync((NaplpsControlCommands)commandParameters[0], source, additionalParameters, commands, opcodeInjected);
 
                     // Re-clone AFTER control command so the sequence's state snapshot
                     // reflects changes made by the handler (cursor position, scroll flag, etc.)
@@ -497,7 +390,7 @@ public sealed class NaplpsDecoder
                     State.ScrollEventOccurred = false;
                 }
 
-                var command = TryInstantiateCommand(commandType, commandParameters, opcode, additionalParameters, reader);
+                var command = TryInstantiateCommand(commandType, commandParameters, opcode, additionalParameters, source.RealPosition);
 
                 if (command != null)
                 {
@@ -509,17 +402,17 @@ public sealed class NaplpsDecoder
                     // serialization stays byte-exact: they include any invocation byte consumed
                     // mid-operand, and exclude the body bytes, which serialize once inside their
                     // definition.
-                    if (splice != null
-                        && (splice.InjectedConsumed != injectedBefore || splice.InjectionCount != injectionsBefore)
-                        && reader.BaseStream.Position > realStart)
+                    if (source.CanSplice
+                        && (source.InjectedConsumed != injectedBefore || source.InjectionCount != injectionsBefore)
+                        && source.RealPosition > realStart)
                     {
-                        sequence.RawCodedBytes = ReadRealRange(reader, realStart, reader.BaseStream.Position);
+                        sequence.RawCodedBytes = source.ReadRealRange(realStart, source.RealPosition);
                     }
 
                     commands.Add(sequence);
 
                     // Track the last spacing character so a following REPEAT can advance the pen
-                    // across the repeated cells (see HandleControlCommand's Repeat branch).
+                    // across the repeated cells (see HandleControlCommandAsync's Repeat branch).
                     if (command is AsciiCharCommand ac && !ac.IsNonSpacing && !ac.IsDiscarded)
                     {
                         _lastCharForRepeat = ac.AsciiCharacter;
@@ -530,24 +423,25 @@ public sealed class NaplpsDecoder
                 // (e.g. IncrementalFieldCommand) so only the triggering command carries it.
                 State.ScrollEventOccurred = false;
             }
-
-            Commit(reader, commands.Count);
-        }
-        catch (NeedMoreDataException)
-        {
-            State.PendingSingleShift = _shiftAtBoundary;
-            throw;
         }
         catch (EndOfStreamException)
         {
             RecordError(NaplpsErrorSeverity.Error, NaplpsErrorType.UnexpectedEndOfStream, "Stream ended unexpectedly during parsing");
         }
 
-        // Only the top-level parse (always spliced) flushes, and only at TRUE end of
-        // stream: a definition open at a feed boundary stays pending - its END may be in
-        // the next chunk. Recursive sub-stream parses (DEFP replay, DRCS data) must not
-        // disturb definition state they did not open.
-        if (splice != null && (_streamingReader == null || _atStreamEnd))
+        // The parse only gets here at the TRUE end of its stream (the wire path suspends
+        // instead when bytes may still come): everything received is resolved.
+        if (streaming)
+        {
+            _boundaryPosition = source.TotalWritten;
+            _atCommandBoundary = true;
+            source.ReleaseBefore(_boundaryPosition);
+        }
+
+        // Only the top-level parse (always splice-enabled) flushes definition buffers left
+        // open at end of stream. Recursive sub-stream parses (DEFP replay, DRCS data) must
+        // not disturb definition state they did not open.
+        if (source.CanSplice)
         {
             FlushOpenDefinitionBuffers(commands);
         }
@@ -604,7 +498,7 @@ public sealed class NaplpsDecoder
     /// Handles bytes while in a buffered definition mode (macro, DRCS, texture).
     /// Returns true if the byte was consumed by the buffer, false if normal processing should continue.
     /// </summary>
-    private bool HandleBufferedByte(byte opcode, BinaryReader reader, List<NaplpsSequence> commands)
+    private async ValueTask<bool> HandleBufferedByteAsync(byte opcode, ByteSource source, List<NaplpsSequence> commands, bool injected)
     {
         // If we're in macro definition mode, buffer bytes until END.
         // Body bytes are ALSO injected as raw byte commands so the Telidraw
@@ -613,55 +507,18 @@ public sealed class NaplpsDecoder
         {
             // A definition may be terminated by a single-byte END or the 7-bit ESC-coded
             // END (ESC 4/5). Consume the trailing final byte so it is not buffered as body.
-            bool escEnd = IsEscEnd(opcode, reader);
+            bool escEnd = await IsEscEndAsync(opcode, source);
             if (escEnd)
             {
-                reader.ReadByte();
+                source.ReadByte();
             }
 
             // X3.110 6.2.2: a DEF MACRO is ALSO terminated by the next DEF MACRO, DEFP
             // MACRO, DEFT MACRO, DEF DRCS, or DEF TEXTURE. The Prodigy logon templates
-            // (TL80TB10) chain dozens of definitions this way with no ENDs at all.
+            // (TL80TB10) chain dozens of definitions this way with no ENDs at all. The
+            // terminating DEF byte is handed back to normal command processing, which
+            // simply suspends if its name byte or operand list has not arrived yet.
             bool defTerminated = !escEnd && !IsEndCommand(opcode) && IsDefinitionCommand(opcode);
-
-            // The terminating DEF byte is handed back to normal command processing below,
-            // which reads its operand list (or name byte) and DEFERS if those bytes run to
-            // the frontier. That unwind would retract the body and replay commands emitted
-            // here while the definition-close state mutations stood - the retry skips the
-            // closed definition and the commands are lost for good. So defer the WHOLE
-            // handoff, before any mutation, unless the terminator's own command is
-            // decidable from the bytes that have arrived: a non-numeric byte must
-            // terminate its operand run (an empty run's first byte then serves as the
-            // name). Skipped when spliced bytes are pending - a peek there would consume
-            // the injection queue - which keeps this exact for the real-stream case.
-            if (defTerminated && ReferenceEquals(reader, _streamingReader) && !_atStreamEnd)
-            {
-                if (reader.IsEOF())
-                {
-                    NeedMoreData(reader);
-                }
-
-                if (reader is not SpliceBinaryReader { InjectedRemaining: > 0 })
-                {
-                    var scan = reader.BaseStream.Position;
-                    bool listTerminated = false;
-                    while (reader.BaseStream.Position < reader.BaseStream.Length)
-                    {
-                        var next = (byte)reader.BaseStream.ReadByte();
-                        if (State.InUseTable[next]?.CommandType != typeof(NumericalDataCommand))
-                        {
-                            listTerminated = true;
-                            break;
-                        }
-                    }
-
-                    reader.BaseStream.Position = scan;
-                    if (!listTerminated)
-                    {
-                        NeedMoreData(reader);
-                    }
-                }
-            }
 
             if (escEnd || defTerminated || IsEndCommand(opcode))
             {
@@ -673,7 +530,7 @@ public sealed class NaplpsDecoder
                 // Inject buffered body bytes as individual raw commands for decompiler fidelity.
                 foreach (var b in State.MacroBuffer)
                 {
-                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, b, [])));
+                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, b, [])) { IsSynthetic = injected });
                 }
 
                 State.MacroBuffer.Clear();
@@ -683,7 +540,7 @@ public sealed class NaplpsDecoder
                     // Inject the END command itself, carrying the ESC form's final byte when
                     // present. A definition-terminated definition has no END byte to inject -
                     // the terminating DEF byte is processed as its own command below.
-                    commands.Add(new NaplpsSequence(State.Clone(), MakeEndCommand(opcode, escEnd)));
+                    commands.Add(new NaplpsSequence(State.Clone(), MakeEndCommand(opcode, escEnd)) { IsSynthetic = injected });
                 }
 
                 if (macroType == 1 && State.Macros.TryGetValue(macroName, out var macroData))
@@ -691,9 +548,7 @@ public sealed class NaplpsDecoder
                     // DEFP MACRO defines and displays in one step (X3.110 define-and-display
                     // form): the executed body is presentation output, not coded input, so
                     // those sequences are synthetic - the definition serializes exactly once.
-                    using var macroStream = new MemoryStream(macroData);
-                    using var macroReader = new BinaryReader(macroStream);
-                    foreach (var seq in ReadStream(macroReader))
+                    foreach (var seq in RunCompleteParse(ByteSource.FromBuffer(macroData)))
                     {
                         seq.IsSynthetic = true;
                         commands.Add(seq);
@@ -725,11 +580,11 @@ public sealed class NaplpsDecoder
 
                 foreach (var b in State.DrcsBuffer)
                 {
-                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, b, [])));
+                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, b, [])) { IsSynthetic = injected });
                 }
 
                 State.DrcsBuffer.Clear();
-                commands.Add(new NaplpsSequence(State.Clone(), new ControlCommand(NaplpsControlCommands.End, State, opcode, [])));
+                commands.Add(new NaplpsSequence(State.Clone(), new ControlCommand(NaplpsControlCommands.End, State, opcode, [])) { IsSynthetic = injected });
             }
             else
             {
@@ -744,10 +599,10 @@ public sealed class NaplpsDecoder
         {
             // Like macros, a 7-bit stream terminates the definition with the ESC-coded END
             // (ESC 4/5); consume the trailing final byte so it is not buffered as body.
-            bool textureEscEnd = IsEscEnd(opcode, reader);
+            bool textureEscEnd = await IsEscEndAsync(opcode, source);
             if (textureEscEnd)
             {
-                reader.ReadByte();
+                source.ReadByte();
             }
 
             if (textureEscEnd || IsEndCommand(opcode))
@@ -757,11 +612,11 @@ public sealed class NaplpsDecoder
 
                 foreach (var b in State.TextureBuffer)
                 {
-                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, b, [])));
+                    commands.Add(new NaplpsSequence(State.Clone(), new NaplpsCommand(State, b, [])) { IsSynthetic = injected });
                 }
 
                 State.TextureBuffer.Clear();
-                commands.Add(new NaplpsSequence(State.Clone(), MakeEndCommand(opcode, textureEscEnd)));
+                commands.Add(new NaplpsSequence(State.Clone(), MakeEndCommand(opcode, textureEscEnd)) { IsSynthetic = injected });
             }
             else
             {
@@ -778,32 +633,28 @@ public sealed class NaplpsDecoder
     /// X3.110 inherits ISO 2022 code extension: in a 7-bit environment a C1 control is coded
     /// as ESC Fe. END is C1 8/5, i.e. ESC 4/5 (0x1B 0x45). Callers that consume the final
     /// byte must carry it on the injected END command so serialization reproduces both bytes.
+    /// The ESC may be the first half of an ESC-coded END split across chunks; buffering it
+    /// as body would corrupt the definition irreversibly, so the peek waits for the byte.
     /// </summary>
-    private bool IsEscEnd(byte opcode, BinaryReader reader)
+    private static async ValueTask<bool> IsEscEndAsync(byte opcode, ByteSource source)
     {
         if (opcode != 0x1B)
         {
             return false;
         }
 
-        if (reader.IsEOF())
+        if (await source.IsEofAsync())
         {
-            // The ESC may be the first half of an ESC-coded END split across chunks; buffering it
-            // as body would corrupt the definition irreversibly.
-            NeedMoreData(reader);
             return false;
         }
 
-        return reader.PeekByte() == 0x45;
+        return source.PeekByte() == 0x45;
     }
 
     private ControlCommand MakeEndCommand(byte opcode, bool escEnd) =>
         new(NaplpsControlCommands.End, State, opcode,
             escEnd ? new NaplpsOperands(new byte[] { 0x45 }) : []);
 
-    /// <summary>
-    /// Checks if the given opcode maps to the END control command.
-    /// </summary>
     /// <summary>
     /// True when the byte is one of the five C1 definition controls (DEF MACRO, DEFP MACRO,
     /// DEFT MACRO, DEF DRCS, DEF TEXTURE) - each of which terminates a definition in
@@ -823,6 +674,9 @@ public sealed class NaplpsDecoder
         return c1 is DefMacro or DefPMacro or DefTMacro or DefDRCS or DefTexture;
     }
 
+    /// <summary>
+    /// Checks if the given opcode maps to the END control command.
+    /// </summary>
     private bool IsEndCommand(byte opcode)
     {
         var cmdRef = State.InUseTable[opcode];
@@ -835,7 +689,7 @@ public sealed class NaplpsDecoder
     /// <summary>
     /// Reads operand bytes following a command opcode.
     /// </summary>
-    private NaplpsOperands ReadOperands(BinaryReader reader, NaplpsOperandType operandType)
+    private async ValueTask<NaplpsOperands> ReadOperandsAsync(ByteSource source, NaplpsOperandType operandType)
     {
         var operands = new NaplpsOperands();
 
@@ -843,9 +697,9 @@ public sealed class NaplpsDecoder
         {
             while (true)
             {
-                if (IsValidNumericalDataNext(reader))
+                if (await IsValidNumericalDataNextAsync(source))
                 {
-                    operands.Add(reader.ReadByte());
+                    operands.Add(source.ReadByte());
                     continue;
                 }
 
@@ -854,15 +708,17 @@ public sealed class NaplpsDecoder
                 // byte invokes a defined macro, consume it and keep scanning inside the
                 // spliced body - a body that begins with numeric data extends THIS command,
                 // and a body that begins with an opcode ends the scan there naturally.
-                if (reader is SpliceBinaryReader splice && !reader.IsEOF())
+                // (The numeric probe above already waited, so a readable byte is present
+                // unless the stream truly ended.)
+                if (source.CanSplice && source.Available > 0)
                 {
-                    var next = reader.PeekByte();
+                    var next = source.PeekByte();
 
                     if (State.IsMacroByte(next) && State.Macros.TryGetValue((char)next, out var macroBody) && macroBody.Length > 0)
                     {
-                        reader.ReadByte();
+                        source.ReadByte();
                         State.PendingSingleShift = null; // the single-shift, if any, is consumed here
-                        splice.InjectFront(macroBody);
+                        source.InjectFront(macroBody);
                         continue;
                     }
                 }
@@ -875,38 +731,21 @@ public sealed class NaplpsDecoder
     }
 
     /// <summary>
-    /// Re-reads a range of the underlying coded stream. Used to capture the exact real bytes
-    /// a splice-boundary command consumed (see <see cref="NaplpsSequence.RawCodedBytes"/>).
-    /// </summary>
-    private static byte[] ReadRealRange(BinaryReader reader, long start, long end)
-    {
-        var stream = reader.BaseStream;
-        var saved = stream.Position;
-        var buffer = new byte[end - start];
-
-        stream.Position = start;
-        stream.ReadExactly(buffer);
-        stream.Position = saved;
-
-        return buffer;
-    }
-
-    /// <summary>
     /// Dispatches a control command to the appropriate handler.
     /// </summary>
-    private void HandleControlCommand(NaplpsControlCommands controlCommand, BinaryReader reader, NaplpsOperands additionalParameters, List<NaplpsSequence> commands)
+    private async ValueTask HandleControlCommandAsync(NaplpsControlCommands controlCommand, ByteSource source, NaplpsOperands additionalParameters, List<NaplpsSequence> commands, bool injected)
     {
         // Core C0 controls
         if (controlCommand == Escape)
         {
-            ControlCommandEscape(reader, additionalParameters);
+            await ControlCommandEscapeAsync(source, additionalParameters);
 
             // ESC + byte in 0x40-0x5F = 7-bit encoding of C1 control codes.
-            // Only dispatch safe state-flag C1 codes — NOT buffer-mode starters
+            // Only dispatch safe state-flag C1 codes - NOT buffer-mode starters
             // (DefMacro, DefTexture, DefDRCS, End) which would swallow subsequent data.
             if (additionalParameters.Count == 1 && additionalParameters[0] >= 0x40 && additionalParameters[0] <= 0x5F)
             {
-                byte c1Code = (byte)(additionalParameters[0] + 0x40); // 0x40→0x80, 0x5F→0x9F
+                byte c1Code = (byte)(additionalParameters[0] + 0x40); // 0x40->0x80, 0x5F->0x9F
                 var c1Ref = State.InUseTable[c1Code];
                 if (c1Ref?.CommandType == typeof(ControlCommand) && c1Ref.Parameters.Count == 1)
                 {
@@ -914,20 +753,16 @@ public sealed class NaplpsDecoder
 
                     // 7-bit DEF MACRO (ESC 4/0..4/2): read the single-byte macro name that
                     // follows and enter buffered definition mode. The body is captured until the
-                    // ESC-encoded END (handled in HandleBufferedByte). MSZB0000-style messaging
-                    // templates define one block macro and invoke it N times to tile the screen.
+                    // ESC-encoded END (handled in HandleBufferedByteAsync). MSZB0000-style
+                    // messaging templates define one block macro and invoke it N times to tile
+                    // the screen. The name read waits for the byte: entering definition mode
+                    // without it would swallow it as body.
                     if (c1Command == DefMacro || c1Command == DefPMacro || c1Command == DefTMacro)
                     {
                         byte macroType = c1Command == DefMacro ? (byte)0 : c1Command == DefPMacro ? (byte)1 : (byte)2;
-                        if (reader.IsEOF())
+                        if (!await source.IsEofAsync())
                         {
-                            // The macro name byte has not arrived; entering definition mode now
-                            // would swallow it as body.
-                            NeedMoreData(reader);
-                        }
-                        else
-                        {
-                            byte nameByte = reader.ReadByte();
+                            byte nameByte = source.ReadByte();
                             additionalParameters.Add(nameByte); // keep for byte-exact round-trip
                             StartMacroDefinition(new NaplpsOperands(new byte[] { nameByte }), macroType);
                         }
@@ -936,18 +771,14 @@ public sealed class NaplpsDecoder
                     // (4/1..4/4); out of range makes the whole command a null operation. The
                     // body is captured until END. Previously the selector byte dangled as an
                     // unknown opcode and the mask body (DOMAIN, the INCREMENTAL POINT tile,
-                    // CLEAR...) executed as LIVE drawing commands on the picture.
+                    // CLEAR...) executed as LIVE drawing commands on the picture. Only a
+                    // finished stream makes the selector-less form a real null operation; on
+                    // the wire the read waits for the selector.
                     else if (c1Command == DefTexture)
                     {
-                        if (reader.IsEOF())
+                        if (!await source.IsEofAsync())
                         {
-                            // On the wire the selector may simply not have arrived yet; only a
-                            // finished stream makes the selector-less form a real null operation.
-                            NeedMoreData(reader);
-                        }
-                        else
-                        {
-                            byte maskSelector = reader.ReadByte();
+                            byte maskSelector = source.ReadByte();
                             additionalParameters.Add(maskSelector); // keep for byte-exact round-trip
 
                             if (maskSelector >= 0x41 && maskSelector <= 0x44)
@@ -964,7 +795,7 @@ public sealed class NaplpsDecoder
                     // their bytes to the outer ESC command's operands, preserving byte fidelity.
                     else if (c1Command != DefDRCS && c1Command != End)
                     {
-                        HandleControlCommand(c1Command, reader, additionalParameters, commands);
+                        await HandleControlCommandAsync(c1Command, source, additionalParameters, commands, injected);
                     }
                 }
             }
@@ -973,7 +804,7 @@ public sealed class NaplpsDecoder
         }
         else if (controlCommand == NonSelectiveReset)
         {
-            ControlCommandNonSelectiveReset(reader, additionalParameters);
+            await ControlCommandNonSelectiveResetAsync(source, additionalParameters);
         }
         else if (controlCommand == ShiftIn)
         {
@@ -986,14 +817,14 @@ public sealed class NaplpsDecoder
         else if (controlCommand == Cancel)
         {
             // ANSI X3.110: CAN terminates all currently executing macros immediately.
-            // Effect is immediate — not queued. Under spliced expansion the pending
+            // Effect is immediate - not queued. Under spliced expansion the pending
             // injected bytes ARE the executing macros: drop them all.
             State.MacroBeingDefined = null;
             State.MacroBuffer.Clear();
 
-            if (reader is SpliceBinaryReader splice)
+            if (source.CanSplice)
             {
-                splice.ClearInjected();
+                source.ClearInjected();
             }
 
             State.IsCancelRequested = true;
@@ -1007,7 +838,7 @@ public sealed class NaplpsDecoder
         else if (controlCommand == ActivePositionSet)
         {
             // ANSI X3.110: APS (0x1C) sets cursor to row/column position.
-            HandleActivePositionSet(reader);
+            await HandleActivePositionSetAsync(source);
         }
         else if (controlCommand == ClearScreen)
         {
@@ -1067,16 +898,16 @@ public sealed class NaplpsDecoder
         // The macro NAME is the byte following the control (X3.110 6.2.2). The 8-bit C1
         // forms (0x80-0x82) arrive here with no operands read, so consume the name from the
         // stream; the 7-bit ESC forms pre-read it into additionalParameters.
-        else if (controlCommand == DefMacro) { StartMacroDefinition(ReadDefinitionOperand(reader, additionalParameters), 0); }
-        else if (controlCommand == DefPMacro) { StartMacroDefinition(ReadDefinitionOperand(reader, additionalParameters), 1); }
-        else if (controlCommand == DefTMacro) { StartMacroDefinition(ReadDefinitionOperand(reader, additionalParameters), 2); }
-        // ANSI X3.110 §6.1.3.3: SS2 invokes G2 into the in-use table for ONE next byte (nonlocking).
-        // Spec §5.5 macros are invoked by designating the Macro Set into G1/G2/G3 then transmitting
-        // a character from that invoked area — NOT via SS2.
+        else if (controlCommand == DefMacro) { StartMacroDefinition(await ReadDefinitionOperandAsync(source, additionalParameters), 0); }
+        else if (controlCommand == DefPMacro) { StartMacroDefinition(await ReadDefinitionOperandAsync(source, additionalParameters), 1); }
+        else if (controlCommand == DefTMacro) { StartMacroDefinition(await ReadDefinitionOperandAsync(source, additionalParameters), 2); }
+        // ANSI X3.110 section 6.1.3.3: SS2 invokes G2 into the in-use table for ONE next byte (nonlocking).
+        // Spec section 5.5 macros are invoked by designating the Macro Set into G1/G2/G3 then transmitting
+        // a character from that invoked area - NOT via SS2.
         else if (controlCommand == SingleShiftTwo) { State.DoSingleShiftTwo(); }
-        // §6.1.3.4: SS3 — same pattern with G3.
+        // section 6.1.3.4: SS3 - same pattern with G3.
         else if (controlCommand == SingleShiftThree) { State.DoSingleShiftThree(); }
-        // §6.1.6.4: SDC — null operation at the presentation layer.
+        // section 6.1.6.4: SDC - null operation at the presentation layer.
         else if (controlCommand == ServiceDelimiterCharacter) { /* no-op per spec */ }
         // DEF DRCS (X3.110 6.2.3): the byte following the control is the code of the first
         // character being defined, consumed like a macro name. Glyph lookup at render time is
@@ -1084,7 +915,7 @@ public sealed class NaplpsDecoder
         // as received. With no operand at true stream end the command is a null operation.
         else if (controlCommand == DefDRCS)
         {
-            var drcsOperand = ReadDefinitionOperand(reader, additionalParameters);
+            var drcsOperand = await ReadDefinitionOperandAsync(source, additionalParameters);
             if (drcsOperand.Count > 0)
             {
                 State.DrcsStartCode = drcsOperand[0];
@@ -1096,7 +927,7 @@ public sealed class NaplpsDecoder
         // operation, with the selector still consumed and kept for byte-exact round-trip.
         else if (controlCommand == DefTexture)
         {
-            var textureOperand = ReadDefinitionOperand(reader, additionalParameters);
+            var textureOperand = await ReadDefinitionOperandAsync(source, additionalParameters);
             if (textureOperand.Count > 0 && textureOperand[0] >= 0x41 && textureOperand[0] <= 0x44)
             {
                 State.TextureBeingDefined = textureOperand[0];
@@ -1107,15 +938,11 @@ public sealed class NaplpsDecoder
         {
             // Repeat command: read the count byte and store it in operands (the actual glyph
             // repetition happens at render time). Advance the parse-time pen across the repeated
-            // cells so the FOLLOWING text's state snapshot starts after the repeated run — e.g. a
+            // cells so the FOLLOWING text's state snapshot starts after the repeated run - e.g. a
             // highlighted-space bar (title) must push the text after it, not overprint it.
-            if (reader.IsEOF())
+            if (!await source.IsEofAsync())
             {
-                NeedMoreData(reader);
-            }
-            else
-            {
-                var countByte = reader.ReadByte();
+                var countByte = source.ReadByte();
                 additionalParameters.Add(countByte);
 
                 if (_lastCharForRepeat is char c && (countByte & 0x7F) >= 0x40)
@@ -1131,21 +958,16 @@ public sealed class NaplpsDecoder
         // RepeatToEOL doesn't need special handling here - count is calculated at render time
     }
 
-    private void HandleActivePositionSet(BinaryReader reader)
+    private async ValueTask HandleActivePositionSetAsync(ByteSource source)
     {
         // Followed by two bytes: row (0x40-0x5F) and column (0x40-0x7F).
-        if (Remaining(reader) < 2)
+        if (!await source.IsEofAsync())
         {
-            NeedMoreData(reader);
-        }
+            byte rowByte = source.ReadByte();
 
-        if (!reader.IsEOF())
-        {
-            byte rowByte = reader.ReadByte();
-
-            if (!reader.IsEOF())
+            if (!await source.IsEofAsync())
             {
-                byte colByte = reader.ReadByte();
+                byte colByte = source.ReadByte();
                 int row = (rowByte & 0x3F); // Strip header bits
                 int col = (colByte & 0x3F);
 
@@ -1337,22 +1159,15 @@ public sealed class NaplpsDecoder
     /// Returns operands already carrying a definition control's single operand byte - the
     /// macro name, DRCS start code, or texture mask selector (the 7-bit ESC paths pre-read
     /// it) - or consumes it from the stream for the direct 8-bit C1 forms, appending it to
-    /// the command's operands so serialization stays byte-exact.
+    /// the command's operands so serialization stays byte-exact. The read waits for the byte:
+    /// entering definition mode without it would swallow it as body. At true stream end no
+    /// byte arrives and the DEF stays a null operation.
     /// </summary>
-    private NaplpsOperands ReadDefinitionOperand(BinaryReader reader, NaplpsOperands operands)
+    private static async ValueTask<NaplpsOperands> ReadDefinitionOperandAsync(ByteSource source, NaplpsOperands operands)
     {
-        if (operands.Count == 0)
+        if (operands.Count == 0 && !await source.IsEofAsync())
         {
-            if (reader.IsEOF())
-            {
-                // The 8-bit operand byte has not arrived; entering definition mode now would
-                // swallow it as body. Defer the whole DEF to the next feed.
-                NeedMoreData(reader);
-            }
-            else
-            {
-                operands.Add(reader.ReadByte());
-            }
+            operands.Add(source.ReadByte());
         }
 
         return operands;
@@ -1376,13 +1191,11 @@ public sealed class NaplpsDecoder
 
             if (State.Macros.TryGetValue(macroName, out var macroData))
             {
-                using var macroStream = new MemoryStream(macroData);
-                using var macroReader = new BinaryReader(macroStream);
-                // ANSI X3.110 §6.1.6.3: pass isMacroExpansion = true so a CAN inside the
-                // macro body terminates it immediately. The outer ReadStream resumes
+                // ANSI X3.110 section 6.1.6.3: pass isMacroExpansion = true so a CAN inside the
+                // macro body terminates it immediately. The outer parse resumes
                 // at the next byte after the macro invocation. Expansion sequences are
                 // synthetic: they render, but only the invocation byte is coded input.
-                foreach (var seq in ReadStream(macroReader, isMacroExpansion: true))
+                foreach (var seq in RunCompleteParse(ByteSource.FromBuffer(macroData), isMacroExpansion: true))
                 {
                     seq.IsSynthetic = true;
                     commands.Add(seq);
@@ -1400,7 +1213,7 @@ public sealed class NaplpsDecoder
     private NaplpsCommand? TryInstantiateCommand(
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors)]
         Type commandType,
-        List<object> commandParameters, byte opcode, NaplpsOperands additionalParameters, BinaryReader reader)
+        List<object> commandParameters, byte opcode, NaplpsOperands additionalParameters, long streamPosition)
     {
         var finalCommandParams = commandParameters.Concat([State, opcode, additionalParameters]).ToArray();
 
@@ -1408,7 +1221,7 @@ public sealed class NaplpsDecoder
         {
             if (Activator.CreateInstance(commandType, finalCommandParams) is not NaplpsCommand cmd)
             {
-                RecordError(NaplpsErrorSeverity.Error, NaplpsErrorType.CommandInstantiationFailed, $"Failed to instantiate {commandType.Name}", opcode, reader.BaseStream.Position);
+                RecordError(NaplpsErrorSeverity.Error, NaplpsErrorType.CommandInstantiationFailed, $"Failed to instantiate {commandType.Name}", opcode, streamPosition);
                 return null;
             }
 
@@ -1416,22 +1229,23 @@ public sealed class NaplpsDecoder
         }
         catch (System.Reflection.TargetInvocationException ex)
         {
-            RecordError(NaplpsErrorSeverity.Error, NaplpsErrorType.CommandInstantiationFailed, $"{commandType.Name} constructor threw: {ex.InnerException?.Message ?? ex.Message}", opcode, reader.BaseStream.Position);
+            RecordError(NaplpsErrorSeverity.Error, NaplpsErrorType.CommandInstantiationFailed, $"{commandType.Name} constructor threw: {ex.InnerException?.Message ?? ex.Message}", opcode, streamPosition);
             return null;
         }
     }
 
-    private bool IsValidNumericalDataNext(BinaryReader reader)
+    private async ValueTask<bool> IsValidNumericalDataNextAsync(ByteSource source)
     {
-        if (reader.IsEOF())
+        // X3.110 operand lists are terminated by the next non-numeric byte, never by a
+        // length. A list that reaches the frontier may continue in the next chunk, so the
+        // probe waits for the deciding byte; only a finished stream terminates the list
+        // at its last byte.
+        if (await source.IsEofAsync())
         {
-            // X3.110 operand lists are terminated by the next non-numeric byte, never by a
-            // length. A list that reaches the frontier may continue in the next chunk.
-            NeedMoreData(reader);
             return false;
         }
 
-        var nextByte = reader.PeekByte();
+        var nextByte = source.PeekByte();
 
         var operandReference = State.InUseTable[nextByte];
 
@@ -1440,25 +1254,25 @@ public sealed class NaplpsDecoder
         return isNumericalData;
     }
 
-    private void ControlCommandEscape(BinaryReader reader, NaplpsOperands additionalParameters)
+    private static async ValueTask ControlCommandEscapeAsync(ByteSource source, NaplpsOperands additionalParameters)
     {
         bool isEscape = true;
 
         while (isEscape)
         {
-            if (reader.IsEOF())
+            // No final byte yet means the rest of the escape sequence may still be in
+            // flight: wait for it. Only a finished stream ends the sequence early.
+            if (await source.IsEofAsync())
             {
-                // No final byte yet: the rest of the escape sequence may still be in flight.
-                NeedMoreData(reader);
                 break;
             }
 
-            var peakValue = reader.PeekByte();
+            var peakValue = source.PeekByte();
 
-            // ANSI X3.110-1983 §4.3.3: an ESC sequence consists of zero or more
+            // ANSI X3.110-1983 section 4.3.3: an ESC sequence consists of zero or more
             // intermediate bytes (0x20-0x2F) followed by a single final byte. The final
             // byte is in 0x30-0x7E for 7-bit transmission, or 0xA0-0xFE for 8-bit.
-            // Earlier parser only handled the 7-bit final range — so 8-bit ESC sequences
+            // Earlier parser only handled the 7-bit final range - so 8-bit ESC sequences
             // like `ESC 0xDF` (= 7-bit `ESC 0x5F`, "Designate other coding system") leaked
             // their final byte into the next command-decode iteration, producing a stray
             // bare NaplpsCommand. 82 occurrences of 0xDF across the corpus turned out to
@@ -1469,7 +1283,7 @@ public sealed class NaplpsDecoder
 
             if (isIntermediate || isFinal7Bit || isFinal8Bit)
             {
-                additionalParameters.Add(reader.ReadByte());
+                additionalParameters.Add(source.ReadByte());
                 isEscape = !(isFinal7Bit || isFinal8Bit); // Stop at any final byte
             }
             else
@@ -1479,16 +1293,20 @@ public sealed class NaplpsDecoder
         }
     }
 
-    private void ControlCommandNonSelectiveReset(BinaryReader reader, NaplpsOperands additionalParameters)
+    private async ValueTask ControlCommandNonSelectiveResetAsync(ByteSource source, NaplpsOperands additionalParameters)
     {
         // NSR's cursor operand is OPTIONAL, so whether it is present can only be known once
-        // enough bytes have arrived. Decide that BEFORE the resets below - unwinding after them
-        // would leave a wholly reset state behind for the re-decode to inherit.
-        var remaining = Remaining(reader);
-
-        if (remaining == 0 || (remaining == 1 && reader.PeekByte() is >= 0x40 and <= 0x7F))
+        // enough bytes have arrived: wait until two bytes are readable, the single readable
+        // byte is provably not a cursor operand, or the stream ends. (A resume is a wake-up,
+        // not a guarantee - re-check after every await.)
+        while (source.Available < 2 && !source.AtEnd)
         {
-            NeedMoreData(reader);
+            if (source.Available == 1 && source.PeekByte() is not (>= 0x40 and <= 0x7F))
+            {
+                break;
+            }
+
+            await source.WaitForData(2);
         }
 
         // ANSI X3.110 NSR: Reset G0-G3, C0, C1 to defaults; reset GL/GR
@@ -1533,21 +1351,19 @@ public sealed class NaplpsDecoder
         // NSR cursor positioning: if two bytes 0x40-0x7F follow, decode row/column.
         // Origin is UPPER LEFT (row 0, col 0 = top-left) - different from 0x1C which uses bottom-left.
         // Capture both bytes into additionalParameters so the serializer re-emits them on ToBytes().
-        if (reader.BytesRemaining() >= 2)
+        if (source.Available >= 2)
         {
-            // PeekChar() UTF-8-decodes the upcoming bytes and THROWS on a multi-byte lead
-            // (e.g. NSR followed by 0xF0..): peek the raw byte via the stream instead.
-            var peek1 = reader.PeekByte();
+            var peek1 = source.PeekByte();
 
             if (peek1 >= 0x40 && peek1 <= 0x7F)
             {
-                byte rowByte = reader.ReadByte();
+                byte rowByte = source.ReadByte();
                 additionalParameters.Add(rowByte);
-                int peek2 = reader.PeekByte();
+                int peek2 = source.PeekByte();
 
                 if (peek2 >= 0x40 && peek2 <= 0x7F)
                 {
-                    byte colByte = reader.ReadByte();
+                    byte colByte = source.ReadByte();
                     additionalParameters.Add(colByte);
 
                     // Extract row/column from bits 6-1 (6 data bits each)
@@ -1590,8 +1406,8 @@ public sealed class NaplpsDecoder
         }
 
         // Defensive guard against malformed files where a DRCS body contains a DEF DRCS
-        // command for another character — the inner ParseDrcsData would recurse via
-        // ReadStream and could stack-overflow on adversarial input. Spec is silent on the
+        // command for another character - the inner ParseDrcsData would recurse via
+        // the sub-parse and could stack-overflow on adversarial input. Spec is silent on the
         // recursion limit, but no real-world file does this; cap it to a small constant
         // and skip silently if exceeded (the partially-decoded bitmap survives).
         if (_drcsRecursionDepth >= MaxDrcsRecursionDepth)
@@ -1619,14 +1435,11 @@ public sealed class NaplpsDecoder
         _drcsRecursionDepth++;
         try
         {
-            using var stream = new MemoryStream(data.ToArray());
-            using var reader = new BinaryReader(stream);
-
             // Save pen position (spec: drawing point set to 0,0 after DRCS)
             var savedPen = State.Pen;
             State.Pen = new Vector3(0, 0, 0);
 
-            var drcsCommands = ReadStream(reader);
+            var drcsCommands = RunCompleteParse(ByteSource.FromBuffer([.. data]));
 
             if (drcsCommands.Count > 0)
             {
