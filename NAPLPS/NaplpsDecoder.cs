@@ -38,8 +38,18 @@ public sealed class NaplpsDecoder
 
     private const int MaxDrcsRecursionDepth = 4;
 
-    /// <summary>Bytes handed to <see cref="Feed"/> that no complete command has claimed yet.</summary>
-    private readonly List<byte> _pending = [];
+    /// <summary>
+    /// Bytes handed to <see cref="Feed"/> that no complete command has claimed yet: the live
+    /// segment is <see cref="_pending"/>[<see cref="_pendingStart"/> ..+ <see cref="_pendingCount"/>].
+    /// Feeds append into spare capacity and consuming a committed prefix advances the start
+    /// offset, so buffer bookkeeping is O(1) amortized per byte - no per-feed copy, no shift.
+    /// The array is compacted only when a dead prefix would otherwise force it to grow.
+    /// </summary>
+    private byte[] _pending = [];
+
+    private int _pendingStart;
+
+    private int _pendingCount;
 
     /// <summary>
     /// The reader over <see cref="_pending"/> while a <see cref="Feed"/> or <see cref="Flush"/>
@@ -55,7 +65,42 @@ public sealed class NaplpsDecoder
     private bool _atStreamEnd;
 
     /// <summary>Bytes received but not yet resolved into a complete command.</summary>
-    public int PendingByteCount => _pending.Count;
+    public int PendingByteCount => _pendingCount;
+
+    /// <summary>Appends bytes to the live pending segment, growing or compacting as needed.</summary>
+    private void PendingAppend(ReadOnlySpan<byte> bytes)
+    {
+        if (_pendingStart + _pendingCount + bytes.Length > _pending.Length)
+        {
+            if (_pendingCount + bytes.Length <= _pending.Length)
+            {
+                // The live bytes plus the new ones fit once the dead prefix is dropped.
+                Array.Copy(_pending, _pendingStart, _pending, 0, _pendingCount);
+            }
+            else
+            {
+                var grown = new byte[Math.Max(_pending.Length * 2, _pendingCount + bytes.Length)];
+                Array.Copy(_pending, _pendingStart, grown, 0, _pendingCount);
+                _pending = grown;
+            }
+
+            _pendingStart = 0;
+        }
+
+        bytes.CopyTo(_pending.AsSpan(_pendingStart + _pendingCount));
+        _pendingCount += bytes.Length;
+    }
+
+    /// <summary>Releases a consumed prefix of the live pending segment.</summary>
+    private void PendingConsume(int count)
+    {
+        _pendingStart += count;
+        _pendingCount -= count;
+        if (_pendingCount == 0)
+        {
+            _pendingStart = 0;
+        }
+    }
 
     public NaplpsDecoder(NaplpsState state)
     {
@@ -133,7 +178,7 @@ public sealed class NaplpsDecoder
     {
         if (!bytes.IsEmpty)
         {
-            _pending.AddRange(bytes);
+            PendingAppend(bytes);
         }
 
         return Decode(atStreamEnd: false);
@@ -151,9 +196,20 @@ public sealed class NaplpsDecoder
     {
         var emitted = new List<NaplpsSequence>();
 
+        // Commands a failed attempt settled but never delivered - the exception preempted
+        // the return value while their state mutations and consumed bytes stood. They belong
+        // to the caller, so the next decode leads with them; losing them would make a
+        // consumer painting from returned commands skip them forever.
+        if (_settledUndelivered is { Count: > 0 })
+        {
+            emitted.AddRange(_settledUndelivered);
+        }
+
+        _settledUndelivered = null;
+
         // A saved expansion tail counts as pending input even when no real bytes are:
         // it must decode on the next attempt (or be released by Flush), never dropped.
-        if (_pending.Count == 0 && _savedInjected is not { Length: > 0 })
+        if (_pendingCount == 0 && _savedInjected is not { Length: > 0 })
         {
             // Even with no bytes pending, declaring the stream over must settle definition
             // buffers whose bytes were consumed in earlier feeds - the one-shot path flushes
@@ -166,9 +222,9 @@ public sealed class NaplpsDecoder
             return emitted;
         }
 
-        var buffer = _pending.ToArray();
-
-        using var stream = new MemoryStream(buffer, writable: false);
+        // Read the live pending segment in place: the stream is scoped to this attempt and
+        // the buffer cannot move under it (no reentrant Feed), so no copy is taken.
+        using var stream = new MemoryStream(_pending, _pendingStart, _pendingCount, writable: false);
 
         // The wire path splices macro expansions exactly like the one-shot path (X3.110
         // 5.5): equivalence between Feed and FromBytes is the contract the corpus gate
@@ -190,8 +246,9 @@ public sealed class NaplpsDecoder
         _streamingReader = reader;
         _atStreamEnd = atStreamEnd;
         _committedPosition = 0;
-        _committedCommandCount = 0;
+        _committedCommandCount = emitted.Count;   // a re-delivered prefix is already settled
         _committedInjected = null;
+        _shiftAtBoundary = State.PendingSingleShift;   // the attempt starts AT a boundary
 
         try
         {
@@ -209,13 +266,35 @@ public sealed class NaplpsDecoder
 
             _savedInjected = _committedInjected;
         }
+        catch
+        {
+            // Any unexpected exception must not desynchronize the context: settle to the
+            // last committed boundary exactly as a deferral does - commands and state up to
+            // the boundary stand, the unconsumed tail stays pending for a retry, and a
+            // mid-expansion queue snapshot is preserved. The exception still propagates,
+            // but the context remains boundary-consistent.
+            if (emitted.Count > _committedCommandCount)
+            {
+                emitted.RemoveRange(_committedCommandCount, emitted.Count - _committedCommandCount);
+            }
+
+            // The settled prefix cannot reach the caller through a throw; stash it so the
+            // next decode delivers it. And a single shift consumed by the aborted command
+            // goes back, exactly as the deferral unwind in ReadStream puts it back.
+            _settledUndelivered = emitted.Count > 0 ? emitted : null;
+            State.PendingSingleShift = _shiftAtBoundary;
+
+            _savedInjected = _committedInjected;
+            PendingConsume((int)_committedPosition);
+            throw;
+        }
         finally
         {
             _streamingReader = null;
             _atStreamEnd = false;
         }
 
-        _pending.RemoveRange(0, atStreamEnd ? buffer.Length : (int)_committedPosition);
+        PendingConsume(atStreamEnd ? _pendingCount : (int)_committedPosition);
 
         return emitted;
     }
@@ -249,6 +328,9 @@ public sealed class NaplpsDecoder
 
     /// <summary>Injected macro-body bytes to restore into the next attempt's reader.</summary>
     private byte[]? _savedInjected;
+
+    /// <summary>Commands settled by an attempt that ended in a throw; see the Decode catch.</summary>
+    private List<NaplpsSequence>? _settledUndelivered;
 
     /// <summary>
     /// A pending SS2/SS3 single-shift is consumed by <see cref="NaplpsState.ResolveByte"/> before
@@ -533,6 +615,45 @@ public sealed class NaplpsDecoder
             // MACRO, DEFT MACRO, DEF DRCS, or DEF TEXTURE. The Prodigy logon templates
             // (TL80TB10) chain dozens of definitions this way with no ENDs at all.
             bool defTerminated = !escEnd && !IsEndCommand(opcode) && IsDefinitionCommand(opcode);
+
+            // The terminating DEF byte is handed back to normal command processing below,
+            // which reads its operand list (or name byte) and DEFERS if those bytes run to
+            // the frontier. That unwind would retract the body and replay commands emitted
+            // here while the definition-close state mutations stood - the retry skips the
+            // closed definition and the commands are lost for good. So defer the WHOLE
+            // handoff, before any mutation, unless the terminator's own command is
+            // decidable from the bytes that have arrived: a non-numeric byte must
+            // terminate its operand run (an empty run's first byte then serves as the
+            // name). Skipped when spliced bytes are pending - a peek there would consume
+            // the injection queue - which keeps this exact for the real-stream case.
+            if (defTerminated && ReferenceEquals(reader, _streamingReader) && !_atStreamEnd)
+            {
+                if (reader.IsEOF())
+                {
+                    NeedMoreData(reader);
+                }
+
+                if (reader is not SpliceBinaryReader { InjectedRemaining: > 0 })
+                {
+                    var scan = reader.BaseStream.Position;
+                    bool listTerminated = false;
+                    while (reader.BaseStream.Position < reader.BaseStream.Length)
+                    {
+                        var next = (byte)reader.BaseStream.ReadByte();
+                        if (State.InUseTable[next]?.CommandType != typeof(NumericalDataCommand))
+                        {
+                            listTerminated = true;
+                            break;
+                        }
+                    }
+
+                    reader.BaseStream.Position = scan;
+                    if (!listTerminated)
+                    {
+                        NeedMoreData(reader);
+                    }
+                }
+            }
 
             if (escEnd || defTerminated || IsEndCommand(opcode))
             {
