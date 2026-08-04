@@ -20,7 +20,7 @@ Input and output paths are hardcoded (`../../../Examples/telidraw/hello.nap` to 
 ## Expected output ✅
 
 ```
-NAPLPS library version: 0.11.0
+NAPLPS library version: 0.12.0
 Loaded ../../../Examples/telidraw/hello.nap (35 bytes)
 Parsed 22 commands, 0 errors
 Wrote hello.png (6709 bytes, 1024x768)

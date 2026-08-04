@@ -241,7 +241,7 @@ On Windows the .exe needs `NAPLPS.dll` next to it or on PATH. On Linux/macOS the
 ## Expected output ✅
 
 ```
-NAPLPS library version: 0.11.0
+NAPLPS library version: 0.12.0
 Loaded ../../../Examples/telidraw/hello.nap (35 bytes)
 Parsed 22 commands, 0 errors
 Wrote hello.png (6709 bytes, 1024x768)

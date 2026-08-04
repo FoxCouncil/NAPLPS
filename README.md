@@ -23,7 +23,7 @@ A from-scratch, spec-focused parser, renderer, encoder, and authoring toolchain,
 
 | | |
 |--------|-------|
-| Current version | 0.11.0 |
+| Current version | 0.12.0 |
 | Tests | 800+ unit tests, plus round-trip Telidraw and visual regression baselines across the corpus |
 | Spec coverage | 98% (see [`docs/gaps.md`](docs/gaps.md) for needs, and [`docs/naplps.md`](docs/naplps.md) for the knowns) |
 
