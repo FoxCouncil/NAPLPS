@@ -1,0 +1,54 @@
+@using System.Diagnostics
+@using NAPLPS
+@using SixLabors.ImageSharp
+@using SixLabors.ImageSharp.PixelFormats
+@inject HttpClient Http
+
+<h3>NAPLPS in the browser</h3>
+<p><b>@status</b></p>
+@if (png is not null)
+{
+    <img src="@png" alt="NAPLPS render" style="max-width:100%;border:1px solid #333;image-rendering:pixelated" />
+}
+
+@code {
+    private const int RenderWidth = 1024;
+    private const int RenderHeight = 768;
+
+    string status = "loading...";
+    string? png;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            // The whole pipeline runs in wasm: fetch bytes, decode through the streaming
+            // session, paint, and encode the framebuffer as a PNG data URL.
+            var bytes = await Http.GetByteArrayAsync("sample/bb8.nap");
+            var sw = Stopwatch.StartNew();
+
+            using var session = new NaplpsStreamSession(RenderWidth, RenderHeight, prodigy: false);
+            session.Append(bytes);
+            var commandCount = session.Flush();
+            var decodeMs = sw.ElapsedMilliseconds;
+
+            session.ExecTo(Math.Max(0, commandCount - 1));
+            var paintMs = sw.ElapsedMilliseconds - decodeMs;
+
+            var rgba = new byte[RenderWidth * RenderHeight * 4];
+            session.CopyFramebufferTo(rgba);
+
+            using var image = Image.LoadPixelData<Rgba32>(rgba, RenderWidth, RenderHeight);
+            using var ms = new MemoryStream();
+            image.SaveAsPng(ms);
+
+            png = "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+            status = $"OK - {bytes.Length} bytes, {commandCount} commands, "
+                   + $"decode {decodeMs}ms, paint {paintMs}ms, encode {sw.ElapsedMilliseconds - decodeMs - paintMs}ms";
+        }
+        catch (Exception ex)
+        {
+            status = "FAILED: " + ex.GetType().Name + ": " + ex.Message;
+        }
+    }
+}
