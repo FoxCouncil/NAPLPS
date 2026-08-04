@@ -10,7 +10,7 @@
 #endif
 
 #define MyAppName "Telidraw"
-#define MyAppExeName "NAPLPSApp.exe"
+#define MyAppExeName "Telidraw.exe"
 
 [Setup]
 ; Never change AppId - it is how upgrades find the existing install.

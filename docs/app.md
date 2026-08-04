@@ -200,7 +200,7 @@ The dialog displays the estimated APNG frame count (= WAIT commands + 1) so you 
 
 ## CLI reference 💻
 
-Invoke as `dotnet run --project NAPLPSApp -- <command> [args]`, or once published, `NAPLPSApp.exe <command> [args]`.
+Invoke as `dotnet run --project NAPLPSApp -- <command> [args]`, or once published, `Telidraw.exe <command> [args]`.
 
 ### `info <file> [--format=text|json]`
 

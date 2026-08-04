@@ -1,11 +1,11 @@
 #!/bin/bash
-# Build the full macOS NAPLPS.app: publish the Avalonia app self-contained, declare the .nap
+# Build the full macOS Telidraw.app: publish the Avalonia app self-contained, declare the .nap
 # UTType, embed the Quick Look thumbnail + preview extensions, and sign the whole bundle.
 # Prerequisites and signing setup: see macos/README.md.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-APP="${1:-$HOME/Desktop/NAPLPS.app}"
+APP="${1:-$HOME/Desktop/Telidraw.app}"
 
 # .NET SDK: honor $DOTNET, else take the first dotnet on PATH.
 DOTNET="${DOTNET:-$(command -v dotnet || true)}"
@@ -89,7 +89,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>com.foxcouncil.naplps</string>
   <key>CFBundleVersion</key><string>0.0.0</string>
   <key>CFBundleShortVersionString</key><string>0.0.0</string>
-  <key>CFBundleExecutable</key><string>NAPLPSApp</string>
+  <key>CFBundleExecutable</key><string>Telidraw</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>naplps</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
@@ -136,7 +136,7 @@ if [ -n "${BUILD_NUMBER:-}" ]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/PlugIns/NAPLPSPreview.appex/Contents/Info.plist"
 fi
 
-chmod +x "$APP/Contents/MacOS/NAPLPSApp"
+chmod +x "$APP/Contents/MacOS/Telidraw"
 if [ "$MAS" = "1" ]; then
   # -- Mac App Store distribution signing --
   # App Sandbox is mandatory for store apps; hardened runtime is not, and stays OFF for the

@@ -1,6 +1,6 @@
 # macOS app + Quick Look build
 
-Builds `NAPLPS.app` (the Avalonia desktop app, self-contained) with embedded Quick Look
+Builds `Telidraw.app` (the Avalonia desktop app, self-contained) with embedded Quick Look
 thumbnail and preview extensions that render `.nap` files natively in Finder. The renderer
 detects the system type from the stream header (`A1 C8` -> Prodigy palette and pipeline,
 `0x0E` -> Telidon, otherwise standard NAPLPS).
@@ -15,7 +15,7 @@ detects the system type from the stream header (`A1 C8` -> Prodigy palette and p
 ## Build
 
 ```
-./macos/build-app.sh [/path/to/NAPLPS.app]     # full app + extensions (default: ~/Desktop)
+./macos/build-app.sh [/path/to/Telidraw.app]     # full app + extensions (default: ~/Desktop)
 ./macos/quicklook/build.sh                     # just the .appex bundles (macos/quicklook/build/)
 ```
 
@@ -53,8 +53,8 @@ Two signing rules the scripts encode (learned the hard way):
 Quick Look extensions activate only for apps in `/Applications` that have been launched once:
 
 ```
-./macos/build-app.sh /Applications/NAPLPS.app
-open /Applications/NAPLPS.app        # once, to register the extensions
+./macos/build-app.sh /Applications/Telidraw.app
+open /Applications/Telidraw.app        # once, to register the extensions
 qlmanage -r && qlmanage -r cache     # reset Quick Look after a rebuild
 ```
 

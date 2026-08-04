@@ -30,8 +30,8 @@ if [ -z "$CODESIGN_ID" ] || [ -z "$INSTALLER_ID" ]; then
 fi
 
 mkdir -p "$OUT"
-MAS=1 CODESIGN_ID="$CODESIGN_ID" "$HERE/build-app.sh" "$OUT/NAPLPS.app"
+MAS=1 CODESIGN_ID="$CODESIGN_ID" "$HERE/build-app.sh" "$OUT/Telidraw.app"
 
 echo "== package installer pkg =="
-productbuild --component "$OUT/NAPLPS.app" /Applications --sign "$INSTALLER_ID" "$OUT/NAPLPS.pkg"
-echo "built: $OUT/NAPLPS.pkg"
+productbuild --component "$OUT/Telidraw.app" /Applications --sign "$INSTALLER_ID" "$OUT/Telidraw.pkg"
+echo "built: $OUT/Telidraw.pkg"
