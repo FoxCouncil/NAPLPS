@@ -13,7 +13,7 @@ public class NaplpsState
 {
     public static JsonSerializerOptions GlobalJsonSerializerOptions { get; } = new()
     {
-        Converters = { new NCRArrayJsonConverter(), new Vector3JsonConverter(), new Vector2JsonConverter() },
+        Converters = { new NCRArrayJsonConverter(), new Vector3JsonConverter(), new Vector2JsonConverter(), new BoolGridJsonConverter() },
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = true,
     };

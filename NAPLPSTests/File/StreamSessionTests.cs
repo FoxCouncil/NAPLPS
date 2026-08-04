@@ -102,18 +102,19 @@ public class StreamSessionTests
     }
 
     /// <summary>Decoder state set up by one append must shape what a LATER append draws -
-    /// the persistent-state contract the C consumer depends on. (The scenario's DEF DRCS
-    /// bytes exercise the definition-command path; note the 8-bit C1 DEF DRCS cannot open
-    /// buffered DRCS mode from the wire today - a pre-existing upstream gap - so what this
-    /// pins is state carriage, asserted by the pixel differential.)</summary>
+    /// the persistent-state contract the C consumer depends on. The DEF DRCS in the first
+    /// append defines a custom glyph for 'A' (see DecoderFeedEquivalenceTests for the
+    /// definition-mode mechanics) and the pixel differential asserts the later append
+    /// drew with it.</summary>
     [TestMethod]
     public void DecoderState_CarriesAcrossAppends()
     {
-        // DEF DRCS for 'A' whose glyph body is a filled rect (a solid block).
+        // DEF DRCS for 'A' whose glyph body is a filled rect (a solid block), closed by END.
         var def = new List<byte> { 0x83, 0x41 };
         var (op, ops) = NaplpsCommandBuilder.BuildRectangleSetFilled(0.1f, 0.1f, 0.8f, 0.8f, 3);
         def.Add(op);
         def.AddRange(ops);
+        def.Add(0x85);
 
         var text = new List<byte>();
         var (pop, pops) = NaplpsCommandBuilder.BuildPointSetAbsolute(0.25f, 0.5f, 3);

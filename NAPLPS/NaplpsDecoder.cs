@@ -1067,9 +1067,9 @@ public sealed class NaplpsDecoder
         // The macro NAME is the byte following the control (X3.110 6.2.2). The 8-bit C1
         // forms (0x80-0x82) arrive here with no operands read, so consume the name from the
         // stream; the 7-bit ESC forms pre-read it into additionalParameters.
-        else if (controlCommand == DefMacro) { StartMacroDefinition(ReadMacroName(reader, additionalParameters), 0); }
-        else if (controlCommand == DefPMacro) { StartMacroDefinition(ReadMacroName(reader, additionalParameters), 1); }
-        else if (controlCommand == DefTMacro) { StartMacroDefinition(ReadMacroName(reader, additionalParameters), 2); }
+        else if (controlCommand == DefMacro) { StartMacroDefinition(ReadDefinitionOperand(reader, additionalParameters), 0); }
+        else if (controlCommand == DefPMacro) { StartMacroDefinition(ReadDefinitionOperand(reader, additionalParameters), 1); }
+        else if (controlCommand == DefTMacro) { StartMacroDefinition(ReadDefinitionOperand(reader, additionalParameters), 2); }
         // ANSI X3.110 §6.1.3.3: SS2 invokes G2 into the in-use table for ONE next byte (nonlocking).
         // Spec §5.5 macros are invoked by designating the Macro Set into G1/G2/G3 then transmitting
         // a character from that invoked area — NOT via SS2.
@@ -1078,8 +1078,31 @@ public sealed class NaplpsDecoder
         else if (controlCommand == SingleShiftThree) { State.DoSingleShiftThree(); }
         // §6.1.6.4: SDC — null operation at the presentation layer.
         else if (controlCommand == ServiceDelimiterCharacter) { /* no-op per spec */ }
-        else if (controlCommand == DefDRCS) { if (additionalParameters.Count > 0) { State.DrcsStartCode = additionalParameters[0]; State.DrcsBuffer.Clear(); } }
-        else if (controlCommand == DefTexture) { if (additionalParameters.Count > 0) { State.TextureBeingDefined = additionalParameters[0]; State.TextureBuffer.Clear(); } }
+        // DEF DRCS (X3.110 6.2.3): the byte following the control is the code of the first
+        // character being defined, consumed like a macro name. Glyph lookup at render time is
+        // by the character's raw opcode (see DrawContext), so the start code is stored exactly
+        // as received. With no operand at true stream end the command is a null operation.
+        else if (controlCommand == DefDRCS)
+        {
+            var drcsOperand = ReadDefinitionOperand(reader, additionalParameters);
+            if (drcsOperand.Count > 0)
+            {
+                State.DrcsStartCode = drcsOperand[0];
+                State.DrcsBuffer.Clear();
+            }
+        }
+        // DEF TEXTURE (6.2.4), same rules as the ESC form above: the byte following the
+        // control selects mask A-D (4/1..4/4); out of range makes the whole command a null
+        // operation, with the selector still consumed and kept for byte-exact round-trip.
+        else if (controlCommand == DefTexture)
+        {
+            var textureOperand = ReadDefinitionOperand(reader, additionalParameters);
+            if (textureOperand.Count > 0 && textureOperand[0] >= 0x41 && textureOperand[0] <= 0x44)
+            {
+                State.TextureBeingDefined = textureOperand[0];
+                State.TextureBuffer.Clear();
+            }
+        }
         else if (controlCommand == Repeat)
         {
             // Repeat command: read the count byte and store it in operands (the actual glyph
@@ -1311,17 +1334,18 @@ public sealed class NaplpsDecoder
     }
 
     /// <summary>
-    /// Returns operands already carrying the macro name (the 7-bit ESC path pre-reads it),
-    /// or consumes the name byte from the stream for the direct 8-bit C1 forms - appending
-    /// it to the command's operands so serialization stays byte-exact.
+    /// Returns operands already carrying a definition control's single operand byte - the
+    /// macro name, DRCS start code, or texture mask selector (the 7-bit ESC paths pre-read
+    /// it) - or consumes it from the stream for the direct 8-bit C1 forms, appending it to
+    /// the command's operands so serialization stays byte-exact.
     /// </summary>
-    private NaplpsOperands ReadMacroName(BinaryReader reader, NaplpsOperands operands)
+    private NaplpsOperands ReadDefinitionOperand(BinaryReader reader, NaplpsOperands operands)
     {
         if (operands.Count == 0)
         {
             if (reader.IsEOF())
             {
-                // The 8-bit name byte has not arrived; entering definition mode now would
+                // The 8-bit operand byte has not arrived; entering definition mode now would
                 // swallow it as body. Defer the whole DEF to the next feed.
                 NeedMoreData(reader);
             }
@@ -1712,28 +1736,29 @@ public sealed class NaplpsDecoder
             }
         }
 
-        // Store the pattern in the appropriate mask slot
+        // Store the pattern in the mask slot the selector picked; the selector arrives as
+        // transmitted (4/1..4/4 selects mask A-D per 6.2.4).
         switch (maskId)
         {
-            case 0:
+            case 0x41:
             {
                 State.TextureMaskA = pattern;
             }
             break;
 
-            case 1:
+            case 0x42:
             {
                 State.TextureMaskB = pattern;
             }
             break;
 
-            case 2:
+            case 0x43:
             {
                 State.TextureMaskC = pattern;
             }
             break;
 
-            case 3:
+            case 0x44:
             {
                 State.TextureMaskD = pattern;
             }

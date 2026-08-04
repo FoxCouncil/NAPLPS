@@ -17,8 +17,6 @@ namespace NAPLPSTests.File;
 /// can afford ONE BYTE AT A TIME over every example file. Every operand list, escape sequence,
 /// macro body and NSR cursor operand in the corpus therefore gets split at every interior
 /// position, which is exactly where a wrong deferral point shows up.
-///
-/// See docs/plans/streaming-decode-and-surface-model.md.
 /// </summary>
 [TestClass]
 public class DecoderFeedEquivalenceTests
@@ -305,6 +303,81 @@ public class DecoderFeedEquivalenceTests
         for (int size = 1; size <= 3; size++)
         {
             var streamed = Streamed(bytes, NaplpsSystemType.NAPLPS, Fixed(size, bytes.Length));
+
+            Assert.AreEqual(oneShot.Commands, streamed.Commands,
+                $"[{size}-byte chunks] " + FirstDifference(oneShot.Commands, streamed.Commands));
+            Assert.AreEqual(oneShot.State, streamed.State, $"[{size}-byte chunks] state diverged");
+        }
+    }
+
+    /// <summary>
+    /// X3.110 6.2.3: the direct 8-bit C1 DEF DRCS (0x83) consumes the start-code byte that
+    /// follows and enters buffered definition mode, so the glyph body renders offscreen
+    /// instead of executing as live drawing - and the glyph is stored under the raw start
+    /// code, which is how text rendering looks it up.
+    /// </summary>
+    [TestMethod]
+    public void DefDrcs_DirectC1_OpensBufferedDefinitionAndStoresTheGlyph()
+    {
+        // DEF DRCS 'A' whose glyph body is a filled rect, terminated by END.
+        var buffer = new List<byte> { 0x83, 0x41 };
+        var (op, ops) = NaplpsCommandBuilder.BuildRectangleSetFilled(0.1f, 0.1f, 0.8f, 0.8f, 3);
+        buffer.Add(op);
+        buffer.AddRange(ops);
+        buffer.Add(0x85);
+        byte[] bytes = [.. buffer];
+
+        var decoder = MakeDecoder(NaplpsSystemType.NAPLPS);
+        decoder.Feed(bytes);
+        decoder.Flush();
+
+        Assert.IsNull(decoder.State.DrcsStartCode, "definition mode left open");
+        Assert.IsTrue(decoder.State.DrcsCharacters.ContainsKey(0x41), "glyph not stored under its start code");
+
+        var oneShot = OneShot(bytes, NaplpsSystemType.NAPLPS);
+
+        for (int size = 1; size <= 3; size++)
+        {
+            var streamed = Streamed(bytes, NaplpsSystemType.NAPLPS, Fixed(size, bytes.Length));
+
+            Assert.AreEqual(oneShot.Commands, streamed.Commands,
+                $"[{size}-byte chunks] " + FirstDifference(oneShot.Commands, streamed.Commands));
+            Assert.AreEqual(oneShot.State, streamed.State, $"[{size}-byte chunks] state diverged");
+        }
+    }
+
+    /// <summary>
+    /// X3.110 6.2.4 via the direct 8-bit C1 DEF TEXTURE (0x84): the selector byte that
+    /// follows picks mask A-D and the buffered body defines the same pattern the ESC-coded
+    /// form defines; an out-of-range selector makes the whole command a null operation with
+    /// the body still buffered (not executed live) until END.
+    /// </summary>
+    [TestMethod]
+    public void DefTexture_DirectC1_MatchesTheEscForm()
+    {
+        // Mask A, one 8-byte body row pattern, END. ESC form: ESC 4/4 (0x1B 0x44).
+        byte[] body = [0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55];
+        byte[] direct = [0x84, 0x41, .. body, 0x85];
+        byte[] escForm = [0x1B, 0x44, 0x41, .. body, 0x85];
+
+        var directDecoder = MakeDecoder(NaplpsSystemType.NAPLPS);
+        directDecoder.Feed(direct);
+        directDecoder.Flush();
+
+        var escDecoder = MakeDecoder(NaplpsSystemType.NAPLPS);
+        escDecoder.Feed(escForm);
+        escDecoder.Flush();
+
+        Assert.IsNull(directDecoder.State.TextureBeingDefined, "definition mode left open");
+        Assert.IsNotNull(directDecoder.State.TextureMaskA, "mask A not stored");
+        CollectionAssert.AreEqual(escDecoder.State.TextureMaskA, directDecoder.State.TextureMaskA,
+            "direct C1 form and ESC form defined different patterns");
+
+        var oneShot = OneShot(direct, NaplpsSystemType.NAPLPS);
+
+        for (int size = 1; size <= 3; size++)
+        {
+            var streamed = Streamed(direct, NaplpsSystemType.NAPLPS, Fixed(size, direct.Length));
 
             Assert.AreEqual(oneShot.Commands, streamed.Commands,
                 $"[{size}-byte chunks] " + FirstDifference(oneShot.Commands, streamed.Commands));
