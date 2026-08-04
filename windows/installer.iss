@@ -1,4 +1,4 @@
-; NAPLPS Toolbox Windows installer. Compiled by CI (release.yml) with:
+; Telidraw Windows installer. Compiled by CI (release.yml) with:
 ;   ISCC.exe /DMyAppVersion=x.y.z /DPublishDir=path\to\publish windows\installer.iss
 ; The publish dir is a self-contained win-x64 dotnet publish of NAPLPSApp.
 
@@ -9,7 +9,7 @@
   #error PublishDir must point at the dotnet publish output
 #endif
 
-#define MyAppName "NAPLPS Toolbox"
+#define MyAppName "Telidraw"
 #define MyAppExeName "NAPLPSApp.exe"
 
 [Setup]
@@ -19,10 +19,10 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher=Fox Council
 AppPublisherURL=https://github.com/FoxCouncil/NAPLPS
-DefaultDirName={autopf}\NAPLPS Toolbox
-DefaultGroupName=NAPLPS Toolbox
+DefaultDirName={autopf}\Telidraw
+DefaultGroupName=Telidraw
 DisableProgramGroupPage=yes
-OutputBaseFilename=NAPLPS-Toolbox-Setup
+OutputBaseFilename=Telidraw-Setup
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible

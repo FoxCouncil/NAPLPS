@@ -4,7 +4,7 @@
              x:Class="NAPLPSApp.App"
              xmlns:local="using:NAPLPSApp"
 			 x:DataType="vm:AppViewModel"
-			 Name="NAPLPS Toolbox"
+			 Name="Telidraw"
              RequestedThemeVariant="Default">
 	<Application.DataTemplates>
 		<local:ViewLocator/>
@@ -21,7 +21,7 @@
 
 	 <NativeMenu.Menu>
     <NativeMenu>
-      <NativeMenuItem Header="About NAPLPS Toolbox" Command="{Binding AboutCommand}" />
+      <NativeMenuItem Header="About Telidraw" Command="{Binding AboutCommand}" />
     </NativeMenu>
   </NativeMenu.Menu>
 </Application>

@@ -13,7 +13,7 @@ namespace NAPLPSSite;
 /// </summary>
 public static class Html
 {
-    public const string SiteName = "NAPLPS Toolbox — Visual Corpus";
+    public const string SiteName = "Telidraw — Visual Corpus";
 
     public static string Encode(string s) => System.Net.WebUtility.HtmlEncode(s);
 
@@ -45,7 +45,7 @@ public static class Html
 
         sb.AppendLine($"<link rel='canonical' href='{Encode(canonical)}'>");
         sb.AppendLine("<meta name='robots' content='index, follow, max-image-preview:large'>");
-        sb.AppendLine($"<meta name='generator' content='NAPLPS Toolbox'>");
+        sb.AppendLine($"<meta name='generator' content='Telidraw'>");
 
         // Open Graph
         sb.AppendLine("<meta property='og:type' content='website'>");
@@ -92,7 +92,7 @@ public static class Html
         var sb = new StringBuilder();
         sb.AppendLine("</main>");
         sb.AppendLine("<footer class='site'>");
-        sb.AppendLine($"<p>Rendered by the NAPLPS Toolbox at <code>{Encode(builtSha[..Math.Min(8, builtSha.Length)])}</code> on {builtAt:yyyy-MM-dd}. ");
+        sb.AppendLine($"<p>Rendered by the Telidraw at <code>{Encode(builtSha[..Math.Min(8, builtSha.Length)])}</code> on {builtAt:yyyy-MM-dd}. ");
         sb.AppendLine("Artwork is the property of its original authors; this corpus exists to verify the renderer.</p>");
         sb.AppendLine("</footer>");
         sb.AppendLine("<!-- Yip, Fox loves you! -->");

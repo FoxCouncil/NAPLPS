@@ -91,12 +91,12 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
-          DMG="$RUNNER_TEMP/NAPLPS-Toolbox-$VERSION-macos-arm64.dmg"
+          DMG="$RUNNER_TEMP/Telidraw-$VERSION-macos-arm64.dmg"
           STAGE="$RUNNER_TEMP/dmg-stage"
           mkdir -p "$STAGE"
           cp -R "$RUNNER_TEMP/NAPLPS.app" "$STAGE/"
           ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname "NAPLPS Toolbox" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+          hdiutil create -volname "Telidraw" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
           SIGN_ID="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
           codesign --force --timestamp --sign "$SIGN_ID" "$DMG"
           xcrun notarytool submit "$DMG" \
@@ -194,8 +194,8 @@ jobs:
       - name: Name the installer
         shell: pwsh
         run: |
-          $out = "${{ runner.temp }}\installer\NAPLPS-Toolbox-Setup.exe"
-          $final = "${{ runner.temp }}\installer\NAPLPS-Toolbox-$env:VERSION-windows-x64-Setup.exe"
+          $out = "${{ runner.temp }}\installer\Telidraw-Setup.exe"
+          $final = "${{ runner.temp }}\installer\Telidraw-$env:VERSION-windows-x64-Setup.exe"
           Move-Item $out $final
           "INSTALLER=$final" | Out-File -FilePath $env:GITHUB_ENV -Append
 

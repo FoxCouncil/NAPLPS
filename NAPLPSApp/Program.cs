@@ -53,7 +53,7 @@ sealed class Program
 
             if (command == "--version" || command == "-v")
             {
-                Console.WriteLine($"NAPLPS Toolbox v{Version}");
+                Console.WriteLine($"Telidraw v{Version}");
                 return 0;
             }
         }
@@ -64,7 +64,7 @@ sealed class Program
 
     private static void PrintHelp()
     {
-        Console.WriteLine($"NAPLPS Toolbox v{Version}");
+        Console.WriteLine($"Telidraw v{Version}");
         Console.WriteLine();
         Console.WriteLine("Usage: NAPLPSApp [command] [options]");
         Console.WriteLine();
@@ -991,7 +991,7 @@ sealed class Program
         var messageBoxParams = new MessageBoxCustomParams
         {
             ContentHeader = $"Version: {Version}\n\nA modern toolbox to read, save, create, and alter NAPLPS files, new and old!\nAn Open Source Project: https://github.com/FoxCouncil/NAPLPS",
-            ContentTitle = "About NAPLPS Toolbox",
+            ContentTitle = "About Telidraw",
             ContentMessage = $"{bigDescription}\n\nCreated by Fox & Contributors!\n\tpheller\n\tportyspice",
             ButtonDefinitions = [new ButtonDefinition { Name = "Cool Beans!", IsDefault = true }],
             WindowIcon = new WindowIcon(iconBitmap), // Set the window icon

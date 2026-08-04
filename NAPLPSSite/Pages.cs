@@ -22,7 +22,7 @@ public static class Pages
     {
         var totalFrames = renders.Sum(r => (long)r.FrameCount);
 
-        var description = $"Every one of the {renders.Count:N0} NAPLPS artworks the toolbox renders, "
+        var description = $"Every one of the {renders.Count:N0} NAPLPS artworks Telidraw renders, "
                         + $"{totalFrames:N0} frames in total, kept as byte-exact visual baselines so any change to the renderer is visible.";
 
         var ld = Html.BreadcrumbLd(baseUrl, ("Gallery", "index.html"));
@@ -348,7 +348,7 @@ public static class Pages
         sb.AppendLine("<rss version=\"2.0\"><channel>");
         sb.AppendLine($"<title>{System.Security.SecurityElement.Escape(Html.SiteName)}</title>");
         sb.AppendLine($"<link>{b}/index.html</link>");
-        sb.AppendLine("<description>Changes to how the NAPLPS Toolbox renders its visual corpus.</description>");
+        sb.AppendLine("<description>Changes to how the Telidraw renders its visual corpus.</description>");
 
         foreach (var c in commits)
         {

@@ -84,8 +84,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>NAPLPS</string>
-  <key>CFBundleDisplayName</key><string>NAPLPS Toolbox</string>
+  <key>CFBundleName</key><string>Telidraw</string>
+  <key>CFBundleDisplayName</key><string>Telidraw</string>
   <key>CFBundleIdentifier</key><string>com.foxcouncil.naplps</string>
   <key>CFBundleVersion</key><string>0.0.0</string>
   <key>CFBundleShortVersionString</key><string>0.0.0</string>

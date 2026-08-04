@@ -11,7 +11,7 @@ namespace NAPLPSApp.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase, IDisposable
 {
-    private const string DEFAULT_APP_NAME = "NAPLPS Toolbox";
+    private const string DEFAULT_APP_NAME = "Telidraw";
 
     private const string DEFAULT_NEW_FILE_NAME = "[Untitled]";
 
