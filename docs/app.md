@@ -1,6 +1,6 @@
-# NAPLPSApp: Editor and CLI Guide 🖥️✨
+# Telidraw: Editor and CLI Guide 🖥️✨
 
-The NAPLPS desktop application is a multi-platform Avalonia-based editor, viewer, and exporter for NAPLPS files. It runs on Windows, macOS, and Linux. Launch it with `dotnet run --project NAPLPSApp`, or use it headless via the CLI subcommands documented at the bottom of this file.
+The NAPLPS desktop application is a multi-platform Avalonia-based editor, viewer, and exporter for NAPLPS files. It runs on Windows, macOS, and Linux. Launch it with `dotnet run --project Telidraw`, or use it headless via the CLI subcommands documented at the bottom of this file.
 
 TODO: Link to installers
 
@@ -200,7 +200,7 @@ The dialog displays the estimated APNG frame count (= WAIT commands + 1) so you 
 
 ## CLI reference 💻
 
-Invoke as `dotnet run --project NAPLPSApp -- <command> [args]`, or once published, `Telidraw.exe <command> [args]`.
+Invoke as `dotnet run --project Telidraw -- <command> [args]`, or once published, `Telidraw.exe <command> [args]`.
 
 ### `info <file> [--format=text|json]`
 

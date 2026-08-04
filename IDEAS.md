@@ -8,7 +8,7 @@ A scratch pad for stuff that isn't a bug and isn't scoped into a release, but sh
 
 ## Housekeeping 🧹
 
-- **Re-enable `Avalonia.Diagnostics` 12.x** once it ships on NuGet. Currently commented out in `NAPLPSApp/NAPLPSApp.csproj`; the 11.3.14 release is the latest at time of bump and isn't ABI-compatible with Avalonia 12.
+- **Re-enable `Avalonia.Diagnostics` 12.x** once it ships on NuGet. Currently commented out in `Telidraw/Telidraw.csproj`; the 11.3.14 release is the latest at time of bump and isn't ABI-compatible with Avalonia 12.
 
 ## Ideas worth considering 💡
 

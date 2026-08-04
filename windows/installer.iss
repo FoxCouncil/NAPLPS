@@ -1,6 +1,6 @@
 ; Telidraw Windows installer. Compiled by CI (release.yml) with:
 ;   ISCC.exe /DMyAppVersion=x.y.z /DPublishDir=path\to\publish windows\installer.iss
-; The publish dir is a self-contained win-x64 dotnet publish of NAPLPSApp.
+; The publish dir is a self-contained win-x64 dotnet publish of Telidraw.
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"

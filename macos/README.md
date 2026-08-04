@@ -20,7 +20,7 @@ detects the system type from the stream header (`A1 C8` -> Prodigy palette and p
 ```
 
 The bundle version is read from `NAPLPS/NAPLPS.csproj` (`InformationalVersion`), and the app
-icon is generated from `NAPLPSApp/Assets/naplps.ico` at build time - nothing host-specific is
+icon is generated from `Telidraw/Assets/naplps.ico` at build time - nothing host-specific is
 required.
 
 ## Signing

@@ -172,18 +172,18 @@ dotnet test NAPLPSTests/NAPLPSTests.csproj --filter "TestCategory!=VR&TestCatego
 dotnet build NAPLPS/NAPLPS.csproj
 
 # Launch the editor
-dotnet run --project NAPLPSApp
+dotnet run --project Telidraw
 
 # Compile + preview a Telidraw source
-dotnet run --project NAPLPSApp -- compile Examples/telidraw/hello.td -o /tmp/hello.nap
-dotnet run --project NAPLPSApp -- export /tmp/hello.nap --format=apng
+dotnet run --project Telidraw -- compile Examples/telidraw/hello.td -o /tmp/hello.nap
+dotnet run --project Telidraw -- export /tmp/hello.nap --format=apng
 
 # Batch-export every file in the corpus to PNG
-dotnet run --project NAPLPSApp -- export --batch Examples/ --output-dir=/tmp/naplps-renders/
+dotnet run --project Telidraw -- export --batch Examples/ --output-dir=/tmp/naplps-renders/
 
 # Diff two files (text mode)
-dotnet run --project NAPLPSApp -- diff file1.nap file2.nap --mode=text
+dotnet run --project Telidraw -- diff file1.nap file2.nap --mode=text
 
 # Visual diff to PNG
-dotnet run --project NAPLPSApp -- diff file1.nap file2.nap --mode=visual
+dotnet run --project Telidraw -- diff file1.nap file2.nap --mode=visual
 ```

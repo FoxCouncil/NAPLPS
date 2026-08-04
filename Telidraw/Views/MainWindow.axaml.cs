@@ -67,7 +67,7 @@ public partial class MainWindow : Window
 
         // Load Telidraw syntax highlighting from the embedded XSHD resource.
         var asm = typeof(MainWindow).Assembly;
-        using (var stream = asm.GetManifestResourceStream("NAPLPSApp.Assets.TelidrawHighlighting.xshd"))
+        using (var stream = asm.GetManifestResourceStream("Telidraw.Assets.TelidrawHighlighting.xshd"))
         {
             if (stream != null)
             {

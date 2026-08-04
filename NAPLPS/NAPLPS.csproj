@@ -7,7 +7,7 @@
 
 		<!-- Opt in to AOT analyzers so reflection / trim-unsafe calls fail the build
 		     instead of quietly breaking at runtime under PublishAot. The library is
-		     a dependency of both the NAPLPSApp desktop editor and any future AOT-published
+		     a dependency of both the Telidraw desktop editor and any future AOT-published
 		     consumer; keeping it AOT-clean lets either publish scenario succeed. -->
 		<IsAotCompatible>true</IsAotCompatible>
 		<IsTrimmable>true</IsTrimmable>

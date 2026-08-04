@@ -30,7 +30,7 @@ A from-scratch, spec-focused parser, renderer, encoder, and authoring toolchain,
 ## What's in the box 📦
 
 - 🧩 **`NAPLPS/`**. The library: parser, renderer, encoder, command builder. Reads and writes `.nap` byte streams, renders to ImageSharp `Image<Rgba32>`, and is AOT-compatible (`<IsAotCompatible>true</IsAotCompatible>`).
-- 🖥️ **`NAPLPSApp/`**. The multi-platform Avalonia desktop editor, viewer, and exporter. Canvas drawing tools, attribute editors, DRCS / Texture designers, sequence inspector, a Telidraw text-source pane (AvaloniaEdit-backed), TCP networking, and APNG export.
+- 🖥️ **`Telidraw/`**. The multi-platform Avalonia desktop editor, viewer, and exporter. Canvas drawing tools, attribute editors, DRCS / Texture designers, sequence inspector, a Telidraw text-source pane (AvaloniaEdit-backed), TCP networking, and APNG export.
 - ✍️ **`Telidraw`**. A word-number DSL (`.td` files) that compiles to `.nap` and decompiles back byte-identical. The canonical human-editable source format. See [docs/telidraw.md](docs/telidraw.md) for the language reference.
 - 🧪 **`NAPLPSTests/`**. Full suite: per-command unit tests, Telidraw lexer/parser/compiler tests, the headline round-trip test across every example, and the visual regression suite (renders each example to APNG and byte-compares against a curated baseline).
 
@@ -41,16 +41,16 @@ A from-scratch, spec-focused parser, renderer, encoder, and authoring toolchain,
 dotnet build NAPLPS.sln
 
 # Launch the editor
-dotnet run --project NAPLPSApp
+dotnet run --project Telidraw
 
 # Compile a .td source file to .nap
-dotnet run --project NAPLPSApp -- compile path/to/scene.td -o path/to/scene.nap
+dotnet run --project Telidraw -- compile path/to/scene.td -o path/to/scene.nap
 
 # Export .nap as APNG
-dotnet run --project NAPLPSApp -- export path/to/scene.nap --format=apng
+dotnet run --project Telidraw -- export path/to/scene.nap --format=apng
 
 # Dump file metadata
-dotnet run --project NAPLPSApp -- info path/to/scene.nap
+dotnet run --project Telidraw -- info path/to/scene.nap
 ```
 
 Open any file from `Examples/` to see it render. The repo includes 375+ historical NAPLPS files, plus hand-authored Telidraw templates in `Examples/telidraw/` (hello, house, star, spirograph, snowflake, clock, palette demo, menu page). 🎨

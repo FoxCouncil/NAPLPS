@@ -22,7 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NAPLPS\NAPLPS.csproj" />
-    <ProjectReference Include="..\NAPLPSApp\NAPLPSApp.csproj" />
+    <ProjectReference Include="..\Telidraw\Telidraw.csproj" />
   </ItemGroup>
 
   <ItemGroup>
