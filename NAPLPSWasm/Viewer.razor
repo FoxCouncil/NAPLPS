@@ -1,54 +1,135 @@
 @using System.Diagnostics
 @using NAPLPS
-@using SixLabors.ImageSharp
-@using SixLabors.ImageSharp.PixelFormats
+@implements IDisposable
 @inject HttpClient Http
+@inject IJSRuntime JS
 
 <h3>NAPLPS in the browser</h3>
+
+<p>
+    <label>
+        speed:
+        <select @bind="baud">
+            <option value="1200">1200 baud</option>
+            <option value="2400">2400 baud</option>
+            <option value="9600">9600 baud</option>
+            <option value="0">instant</option>
+        </select>
+    </label>
+    <button @onclick="Restart">restart</button>
+    <InputFile OnChange="LoadLocalFile" />
+</p>
+
 <p><b>@status</b></p>
-@if (png is not null)
-{
-    <img src="@png" alt="NAPLPS render" style="max-width:100%;border:1px solid #333;image-rendering:pixelated" />
-}
+
+<canvas @ref="canvas" style="max-width:100%;border:1px solid #333;image-rendering:pixelated"></canvas>
 
 @code {
+    // The session is driven here exactly the way a native client drives naplps_ctx_*:
+    // append a chunk, exec to the newest complete command, copy the framebuffer into a
+    // reused caller-owned buffer, blit. Costs scale with the chunk, never the session.
     private const int RenderWidth = 1024;
     private const int RenderHeight = 768;
 
-    string status = "loading...";
-    string? png;
+    private ElementReference canvas;
+    private NaplpsStreamSession? session;
+    private byte[] streamBytes = [];
+    private readonly byte[] rgba = new byte[RenderWidth * RenderHeight * 4];
+    private CancellationTokenSource? playback;
 
-    protected override async Task OnInitializedAsync()
+    private string status = "loading...";
+    private int baud = 1200;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender)
+        {
+            streamBytes = await Http.GetByteArrayAsync("sample/bb8.nap");
+            await Play();
+        }
+    }
+
+    private async Task LoadLocalFile(InputFileChangeEventArgs e)
+    {
+        using var ms = new MemoryStream();
+        await e.File.OpenReadStream(maxAllowedSize: 4 * 1024 * 1024).CopyToAsync(ms);
+        streamBytes = ms.ToArray();
+        await Play();
+    }
+
+    private Task Restart() => Play();
+
+    private async Task Play()
+    {
+        playback?.Cancel();
+        playback = new CancellationTokenSource();
+        var token = playback.Token;
+
+        session?.Dispose();
+        var live = new NaplpsStreamSession(RenderWidth, RenderHeight, prodigy: false);
+        session = live;
+
+        // A real wire delivers bytes at line rate; NAPLPS modems were commonly 1200 baud
+        // (~120 bytes/s). One tick per frame-ish interval, chunk sized to the rate.
+        var tickMs = 50;
+        var chunk = baud > 0 ? Math.Max(1, baud / 10 * tickMs / 1000) : streamBytes.Length;
+
+        var sw = Stopwatch.StartNew();
+        var offset = 0;
+
         try
         {
-            // The whole pipeline runs in wasm: fetch bytes, decode through the streaming
-            // session, paint, and encode the framebuffer as a PNG data URL.
-            var bytes = await Http.GetByteArrayAsync("sample/bb8.nap");
-            var sw = Stopwatch.StartNew();
+            while (offset < streamBytes.Length)
+            {
+                token.ThrowIfCancellationRequested();
 
-            using var session = new NaplpsStreamSession(RenderWidth, RenderHeight, prodigy: false);
-            session.Append(bytes);
-            var commandCount = session.Flush();
-            var decodeMs = sw.ElapsedMilliseconds;
+                var len = Math.Min(chunk, streamBytes.Length - offset);
+                live.Append(streamBytes[offset..(offset + len)]);
+                offset += len;
 
-            session.ExecTo(Math.Max(0, commandCount - 1));
-            var paintMs = sw.ElapsedMilliseconds - decodeMs;
+                await PaintLatest(live);
+                status = $"streaming - {offset}/{streamBytes.Length} bytes, {live.CommandCount} commands";
+                StateHasChanged();
 
-            var rgba = new byte[RenderWidth * RenderHeight * 4];
-            session.CopyFramebufferTo(rgba);
+                if (baud > 0)
+                {
+                    await Task.Delay(tickMs, token);
+                }
+            }
 
-            using var image = Image.LoadPixelData<Rgba32>(rgba, RenderWidth, RenderHeight);
-            using var ms = new MemoryStream();
-            image.SaveAsPng(ms);
+            // Only the driver knows the stream ended: release a command whose operand
+            // list ran to the last byte.
+            live.Flush();
+            await PaintLatest(live);
 
-            png = "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
-            status = $"OK - {bytes.Length} bytes, {commandCount} commands, "
-                   + $"decode {decodeMs}ms, paint {paintMs}ms, encode {sw.ElapsedMilliseconds - decodeMs - paintMs}ms";
+            status = $"done - {streamBytes.Length} bytes, {live.CommandCount} commands in {sw.ElapsedMilliseconds}ms";
+            StateHasChanged();
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
-            status = "FAILED: " + ex.GetType().Name + ": " + ex.Message;
+            // A cancelled run may observe its session disposed under it; only a live run's
+            // failure is news.
+            if (!token.IsCancellationRequested)
+            {
+                status = "FAILED: " + ex.GetType().Name + ": " + ex.Message;
+                StateHasChanged();
+            }
         }
+    }
+
+    private async Task PaintLatest(NaplpsStreamSession live)
+    {
+        live.ExecTo(Math.Max(0, live.CommandCount - 1));
+        live.CopyFramebufferTo(rgba);
+        await JS.InvokeVoidAsync("naplpsBlit", canvas, RenderWidth, RenderHeight, rgba);
+    }
+
+    public void Dispose()
+    {
+        playback?.Cancel();
+        session?.Dispose();
     }
 }
