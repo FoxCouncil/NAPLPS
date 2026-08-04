@@ -10,10 +10,10 @@
     <label>
         speed:
         <select @bind="baud">
-            <option value="1200">1200 baud</option>
-            <option value="2400">2400 baud</option>
-            <option value="9600">9600 baud</option>
-            <option value="0">instant</option>
+            @foreach (var rate in NaplpsBaud.Rates)
+            {
+                <option value="@rate">@NaplpsBaud.Describe(rate)@(rate == NaplpsBaud.Default ? " — live" : "")</option>
+            }
         </select>
     </label>
     <button @onclick="Restart">restart</button>
@@ -38,7 +38,7 @@
     private CancellationTokenSource? playback;
 
     private string status = "loading...";
-    private int baud = 1200;
+    private int baud = NaplpsBaud.Default;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -69,10 +69,13 @@
         var live = new NaplpsStreamSession(RenderWidth, RenderHeight, prodigy: false);
         session = live;
 
-        // A real wire delivers bytes at line rate; NAPLPS modems were commonly 1200 baud
-        // (~120 bytes/s). One tick per frame-ish interval, chunk sized to the rate.
-        var tickMs = 50;
-        var chunk = baud > 0 ? Math.Max(1, baud / 10 * tickMs / 1000) : streamBytes.Length;
+        // One tick per frame-ish interval, chunk sized to what the wire delivers in it.
+        // Fastest still slices with a real delay: Blazor wasm shares the UI thread, and an
+        // unyielding decode-and-paint of a whole file locks the browser.
+        const int tickMs = 50;
+        var chunk = baud > 0
+            ? Math.Max(1, (int)(baud / NaplpsBaud.BitsPerByte * tickMs / 1000.0))
+            : 16 * 1024;
 
         var sw = Stopwatch.StartNew();
         var offset = 0;
@@ -91,10 +94,7 @@
                 status = $"streaming - {offset}/{streamBytes.Length} bytes, {live.CommandCount} commands";
                 StateHasChanged();
 
-                if (baud > 0)
-                {
-                    await Task.Delay(tickMs, token);
-                }
+                await Task.Delay(baud > 0 ? tickMs : 1, token);
             }
 
             // Only the driver knows the stream ended: release a command whose operand

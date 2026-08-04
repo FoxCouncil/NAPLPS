@@ -139,9 +139,10 @@ public static class Player
               this.bitmaps = [];
               this.index = -1;
               this.playing = false;
-              // Files carry authentic 1200-baud timing, which on the smaller pieces is over
-              // before you have focused on it. Start at a quarter speed and let 1x mean real.
-              this.rate = 0.25;
+              // Files carry authentic 1200-baud timing (NaplpsBaud.Default), and the speed
+              // control offers LINE RATES, not multipliers: the playback multiplier is the
+              // chosen baud over 1200. Default is live - the speed the picture arrived at.
+              this.rate = 1;
               this.loop = false;   // deliberately off: a looping animation is hard to read
               this.timer = null;
 
@@ -285,6 +286,9 @@ public static class Player
             }
 
             play() {
+              // Fastest is unpaced drawing: the finished picture, immediately.
+              if (this.rate <= 0) { this.pause(); this.seek(this.total - 1); return; }
+
               // Starting from the end replays from the beginning rather than sitting there.
               if (this.index >= this.total - 1) { this.seek(0); }
 
@@ -341,7 +345,12 @@ public static class Player
               this.scrub.addEventListener('pointercancel', () => { this.dragging = false; });
               this.scrub.addEventListener('input', () => { this.pause(); this.seek(+this.scrub.value); });
               this.scrub.addEventListener('change', () => { this.dragging = false; this.seek(+this.scrub.value); });
-              q('.p-rate').addEventListener('change', e => { this.rate = parseFloat(e.target.value); });
+              q('.p-rate').addEventListener('change', e => {
+                const baud = parseInt(e.target.value, 10);
+                this.rate = baud > 0 ? baud / 1200 : 0;
+                // Fastest means unpaced drawing: the finished picture, immediately.
+                if (this.rate <= 0) { this.pause(); this.seek(this.total - 1); }
+              });
 
               this.loopBtn = q('.p-loop');
               this.loopBtn.addEventListener('click', () => {

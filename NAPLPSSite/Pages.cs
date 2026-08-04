@@ -152,15 +152,20 @@ public static class Pages
             sb.AppendLine("<button class='p-end' type='button' disabled title='End' aria-label='Last frame'>&raquo;&#124;</button>");
             sb.AppendLine($"<input class='p-scrub' type='range' min='0' max='{Math.Max(0, r.FrameCount - 1)}' value='0' step='1' disabled aria-label='Scrub frames'>");
             sb.AppendLine("<button class='p-loop' type='button' disabled aria-pressed='false' title='Play once'>&#8635; Loop</button>");
-            sb.AppendLine("<select class='p-rate' disabled aria-label='Playback rate' title='1x is real time: the speed this picture arrived at over a 1200 baud line'>");
-            sb.AppendLine("<option value='0.1'>0.1x</option><option value='0.25' selected>0.25x</option><option value='0.5'>0.5x</option><option value='1'>1x &mdash; live</option>");
-            sb.AppendLine("<option value='2'>2x</option><option value='4'>4x</option><option value='8'>8x</option>");
+            sb.AppendLine($"<select class='p-rate' disabled aria-label='Line speed' title='The line speed the picture plays at; {NAPLPS.NaplpsBaud.Describe(NAPLPS.NaplpsBaud.Default)} is the speed it actually arrived over'>");
+
+            foreach (var rate in NAPLPS.NaplpsBaud.Rates)
+            {
+                var live = rate == NAPLPS.NaplpsBaud.Default;
+                sb.AppendLine($"<option value='{rate}'{(live ? " selected" : "")}>{NAPLPS.NaplpsBaud.Describe(rate)}{(live ? " &mdash; live" : "")}</option>");
+            }
+
             sb.AppendLine("</select>");
             sb.AppendLine("<span class='p-frame'>&mdash;</span>");
             sb.AppendLine("<span class='p-time'></span>");
             sb.AppendLine("</div>");
 
-            sb.AppendLine($"<figcaption>Animated PNG &middot; {r.FrameCount:N0} frames &middot; {Html.Bytes(r.ApngBytes)} &middot; paced as it would have arrived over a 1200 baud line; 1x is real time &middot; space to play/pause, arrows to step</figcaption>");
+            sb.AppendLine($"<figcaption>Animated PNG &middot; {r.FrameCount:N0} frames &middot; {Html.Bytes(r.ApngBytes)} &middot; plays at the line speed you pick; {NAPLPS.NaplpsBaud.Describe(NAPLPS.NaplpsBaud.Default)} is how it actually arrived &middot; space to play/pause, arrows to step</figcaption>");
             sb.AppendLine("</figure>");
 
             sb.AppendLine("<table class='facts'>");
