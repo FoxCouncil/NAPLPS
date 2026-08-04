@@ -162,6 +162,14 @@ public sealed class NaplpsDecoder
         }
     }
 
+    /// <summary>
+    /// True when a partial command is waiting on bytes still to come - whether its bytes
+    /// sit in the pending buffer or, for a deferred macro expansion whose real bytes were
+    /// all consumed, in the saved injection tail. A caller must not append bytes of its
+    /// own devising over either: they would splice into the partial command.
+    /// </summary>
+    public bool HasDeferredTail => _pendingCount > 0 || _savedInjected is { Length: > 0 };
+
     private static long Remaining(BinaryReader reader) =>
         reader.BaseStream.Length - reader.BaseStream.Position
         + (reader is SpliceBinaryReader s ? s.InjectedRemaining : 0);

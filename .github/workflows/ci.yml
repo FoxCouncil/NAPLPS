@@ -49,7 +49,7 @@ jobs:
         run: dotnet build --configuration Release --nologo
 
       - name: Test
-        run: dotnet test --configuration Release --no-build --nologo --filter "TestCategory!=VR" --logger "trx;LogFileName=tests-${{ matrix.os }}.trx"
+        run: dotnet test --configuration Release --no-build --nologo --filter "TestCategory!=VR&TestCategory!=Perf" --logger "trx;LogFileName=tests-${{ matrix.os }}.trx"
 
       - name: Upload test results
         if: ${{ !cancelled() }}

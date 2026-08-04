@@ -1,8 +1,10 @@
 # NAPLPS Native Interop Examples 🌐✨
 
-Nine small programs (C, C++, Rust, Python, Node.js, Go, Zig, PHP, Ruby) plus a Swift scaffold that link against the AOT-published NAPLPS library and render a `.nap` file to a `.png`. Each demonstrates the four exported entry points: `naplps_version`, `naplps_command_count`, `naplps_error_count`, `naplps_render_png`.
+Nine small programs (C, C++, Rust, Python, Node.js, Go, Zig, PHP, Ruby) plus a Swift scaffold that link against the AOT-published NAPLPS library and render a `.nap` file to a `.png`. Each demonstrates the four core entry points: `naplps_version`, `naplps_command_count`, `naplps_error_count`, `naplps_render_png`. (The library exports more - see the Exported API table.)
 
 All ten produce a **byte-identical 6709-byte PNG** (MD5 `9a431be59694112d90d9e33297efbe46`) from the same `Examples/telidraw/hello.nap` input. The table below is exhaustive: toolchain, FFI mechanism, build command, runtime setup, and the size of each demo's source file.
+
+`c/ctx.c` is a separate smoke test for the stateful `naplps_ctx_*` API (split append, flush, stepped paint, draw_text, fill_rect, stroke_rect, command_count, reset); its build line is in its own header comment. The table below covers the render-to-PNG demos:
 
 | Language | Tested version | FFI mechanism | Compile step | Runtime setup | Demo LOC |
 |---|---|---|---|---|---|
@@ -34,6 +36,7 @@ tools/aot/
   publish.ps1        - one-shot publish + import-lib copy
   c/
     main.c
+    ctx.c            - smoke test for the stateful naplps_ctx_* API
     build-msvc.ps1   - Windows MSVC build (verified)
     Makefile         - GCC / MinGW build
   cpp/
@@ -248,14 +251,29 @@ The output PNG is a valid 8-bit RGBA PNG. First bytes: `89 50 4E 47 0D 0A 1A 0A`
 
 ## Exported API 🔌
 
-All four functions come from `NAPLPS/NativeExports.cs` via `[UnmanagedCallersOnly(EntryPoint = "...")]`. `dumpbin /EXPORTS NAPLPS.dll` confirms the symbols:
+The exports come from `NAPLPS/NativeExports.cs` (stateless) and `NAPLPS/NativeExportsCtx.cs` (stateful decoder contexts) via `[UnmanagedCallersOnly(EntryPoint = "...")]`. `dumpbin /EXPORTS NAPLPS.dll` confirms the symbols:
 
 ```
 naplps_command_count
+naplps_ctx_append
+naplps_ctx_command_count
+naplps_ctx_create
+naplps_ctx_destroy
+naplps_ctx_draw_text
+naplps_ctx_exec_next
+naplps_ctx_exec_to
+naplps_ctx_fill_rect
+naplps_ctx_flush
+naplps_ctx_framebuffer
+naplps_ctx_reset
+naplps_ctx_stroke_rect
 naplps_error_count
 naplps_render_png
+naplps_render_png_prodigy
 naplps_version
 ```
+
+Stateless functions:
 
 | Symbol | Purpose | Returns |
 |---|---|---|
@@ -263,20 +281,38 @@ naplps_version
 | `naplps_command_count(bytes, len)` | Parsed NAPLPS command count | count, or negative error |
 | `naplps_error_count(bytes, len)` | Parse error count | count (0 = clean), or negative error |
 | `naplps_render_png(bytes, len, w, h, buf, buf_len)` | Render .nap to PNG | PNG bytes written, required size if `buf_len == 0`, or negative error |
+| `naplps_render_png_prodigy(...)` | Same, forcing the Prodigy pipeline | as above |
 
-Error codes (all negative return values):
+Stateful decoder contexts (`naplps_ctx_*`): an opaque handle owning a persistent decoder and a raw RGBA8888 framebuffer, for consumers that append bytes over time, paint command-by-command, and blit without PNG round-trips. Decoding is forward-only: an append costs the size of its chunk, nothing is repainted, and a command whose operands run to the last received byte is withheld until it is terminated or `naplps_ctx_flush` declares the stream over. Full semantics in `include/naplps.h`.
+
+| Symbol | Purpose |
+|---|---|
+| `naplps_ctx_create(w, h, flags)` / `naplps_ctx_destroy(ctx)` | Lifecycle; flags: bit 0 = Prodigy pipeline, bit 1 = transparent background (window overlays) |
+| `naplps_ctx_reset(ctx)` | Fresh page: clears decoder state and framebuffer |
+| `naplps_ctx_append(ctx, bytes, len)` | Append stream bytes; returns the count of complete commands |
+| `naplps_ctx_flush(ctx)` | Declare the stream complete, releasing a trailing operand-terminated command |
+| `naplps_ctx_command_count(ctx)` | Complete-command count |
+| `naplps_ctx_exec_to(ctx, idx)` / `naplps_ctx_exec_next(ctx, dirty)` | Paint commands; step returns -4 at stream end |
+| `naplps_ctx_draw_text(ctx, x, y, fg, bg, cw, ch, text, len)` | Append a field-text run via the library encoder |
+| `naplps_ctx_fill_rect(ctx, x, y, w, h, color)` | Append a solid grid-quantized filled rectangle (block cursor / cell repaint; see header for cell addressing) |
+| `naplps_ctx_stroke_rect(ctx, x, y, w, h, color)` | Append a one-pel rectangle outline (hairline focus/cursor border) |
+| `naplps_ctx_framebuffer(ctx, &w, &h, &stride)` | Pinned RGBA8888 pixels, valid for the context lifetime |
+
+Error codes (negative return values):
 
 | Code | Meaning |
 |---|---|
-| -1 | Parse error or exception during render |
+| -1 | Parse error or exception (a failed append settles to the last command boundary - see the failure model in naplps.h; stateless calls have no effect) |
 | -2 | Output buffer too small |
-| -3 | Invalid input (null pointer or non-positive length) |
+| -3 | Invalid input (null pointer, non-positive length, bad argument or state) |
+| -4 | Status, not an error: `exec_next` past the last command, `exec_to` before anything is paintable |
+| -5 | Bad context handle |
 
-All functions are thread-safe. Each call builds its own render state; there is no shared handle to manage.
+The stateless functions are thread-safe: each call builds its own render state. Context handles are different: creating/destroying/looking up handles is safe from any thread, but a given context must not be used from two threads at the same time, and its framebuffer pointer is only coherent between the caller's own calls.
 
 ## Adding a new language binding ➕
 
-The ABI is standard C: plain `int32_t` returns, raw `uint8_t*` buffers, no structs, no callbacks, no manual memory allocation crossing the boundary. Any language with a C FFI should work. `tools/aot/include/naplps.h` is the source of truth for signatures.
+The ABI is standard C: `int32_t` returns (plus the `intptr_t` context handle, the `const uint8_t*` framebuffer pointer, and two `void` teardown calls), raw `uint8_t*` buffers, no callbacks, no manual memory allocation crossing the boundary (the only struct is the optional 4-int `NaplpsRect` out-parameter). Any language with a C FFI should work. `tools/aot/include/naplps.h` is the source of truth for signatures.
 
 Strong candidates for further bindings:
 

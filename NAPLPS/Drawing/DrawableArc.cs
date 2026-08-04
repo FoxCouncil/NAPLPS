@@ -344,8 +344,10 @@ public class DrawableArc : Drawable, IDrawable
         }
         else
         {
-            // Non-set variant: start is the pen position, all vertices are relative displacements
-            var current = _command.State.Pen;
+            // Non-set variant: start is the pen position, all vertices are relative displacements.
+            // The pen comes from this command's own pre-execution snapshot, not the shared live
+            // parse state, which by paint time has moved on to wherever decoding has reached.
+            var current = state.Pen;
             var (sx, sy) = ConvertNormalizedToScreenF(size, current.X, current.Y);
             controlPoints.Add(new PointF(sx, sy));
 

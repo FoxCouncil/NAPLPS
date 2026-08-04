@@ -224,15 +224,10 @@ public class DrawContext : IDisposable
 
         // Re-establish per-render display options on this thread right before drawing, so
         // parallel/batch renders of files with different settings do not contaminate.
-        Drawable.Options.ColorGunWidth = ColorGunWidth;
-        Drawable.Options.HardText = HardText;
-        Drawable.Options.UseMvdiFont = UseMvdiFont;
-        Drawable.Options.AuthenticGeometry = AuthenticGeometry;
-        Drawable.Options.Antialias = Antialias;
-        NaplpsUtils.DisplayRatio = DisplayRatio;
+        EstablishRenderOptions();
 
         // Clear canvas (important for loop restarts and re-renders)
-        Image.Mutate(ctx => ctx.Fill(ISColor.Black));
+        ClearCanvas();
 
         // LivePalette holds the final palette for scroll clear and palette animation.
         // UseLivePalette controls whether drawing commands use it:
@@ -251,6 +246,77 @@ public class DrawContext : IDisposable
 
         Drawable.LivePalette = null;
         Drawable.UseLivePalette = false;
+    }
+
+    /// <summary>
+    /// Fill the canvas with the background (black) without touching decoder or option state.
+    /// Callers that step incrementally use this once per fresh page instead of BeginRender.
+    /// </summary>
+    public void ClearCanvas()
+    {
+        ClearCanvas(ISColor.Black);
+    }
+
+    /// <summary>Fill the canvas with an arbitrary background - e.g. transparent for
+    /// window-overlay contexts where unpainted pixels must not occlude the page below.</summary>
+    public void ClearCanvas(ISColor background)
+    {
+        Image.Mutate(ctx => ctx.Fill(background));
+    }
+
+    /// <summary>
+    /// Render exactly one command onto the EXISTING canvas - no clear, no replay. This is the
+    /// incremental path for stateful consumers (the C ABI's exec_next/exec_to): per-render
+    /// display options are re-established each call, and cross-command render state (repeat
+    /// tracking) persists on the instance between steps. Two whole-render behaviors do not
+    /// apply when stepping: the retroactive CLUT re-render for mid-stream palette
+    /// redefinition (Prodigy streams are unaffected - fixed hardware palette), and
+    /// <see cref="PaletteAnimationMode"/>.
+    ///
+    /// Palette resolution is pinned to the command's OWN snapshot. Filled geometry otherwise
+    /// takes its palette from NaplpsCommand.State - the single live parse state, which in the
+    /// whole-file model is the final one (see Drawable.GetBrushAndPenFromFillableCommand and
+    /// GeometricDrawingCommandBase.GetColors). A stepping consumer decodes ahead of what it has
+    /// painted, so "live" there means "as far as the last append got", and a stream that
+    /// redefines a palette entry would otherwise paint differently depending on where its chunk
+    /// boundaries fell. Pinning makes stepping chunking-invariant and paints each shape in the
+    /// color that was in force when it was coded; it is also why stepping cannot reproduce the
+    /// retroactive re-render, which is the opposite convention.
+    /// </summary>
+    public void RenderStep(int commandIndex)
+    {
+        if (commandIndex < 0 || commandIndex >= NAPLPS.Commands.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(commandIndex));
+        }
+
+        var seq = NAPLPS.Commands[commandIndex];
+
+        EstablishRenderOptions();
+        Drawable.LivePalette = seq.State.ColorMap;
+        Drawable.UseLivePalette = true;
+
+        try
+        {
+            RenderCommand(seq.Command, seq.State);
+        }
+        finally
+        {
+            Drawable.LivePalette = null;
+            Drawable.UseLivePalette = false;
+        }
+    }
+
+    /// <summary>Push this context's display options into the thread-static render state.
+    /// Called before every render pass and every step.</summary>
+    private void EstablishRenderOptions()
+    {
+        Drawable.Options.ColorGunWidth = ColorGunWidth;
+        Drawable.Options.HardText = HardText;
+        Drawable.Options.UseMvdiFont = UseMvdiFont;
+        Drawable.Options.AuthenticGeometry = AuthenticGeometry;
+        Drawable.Options.Antialias = Antialias;
+        NaplpsUtils.DisplayRatio = DisplayRatio;
     }
 
     /// <summary>
