@@ -1,6 +1,6 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
-namespace NAPLPSApp.Editor;
+namespace Telidraw.Editor;
 
 /// <summary>
 /// Tracks which NaplpsSequence belongs to which layer, plus which layer is active for

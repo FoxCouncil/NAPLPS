@@ -2,10 +2,10 @@
 
 using System.ComponentModel;
 using Avalonia.Controls;
-using NAPLPSApp.ViewModels.Menus;
+using Telidraw.ViewModels.Menus;
 using Menu = Avalonia.Controls.Menu;
 
-namespace NAPLPSApp.Views.Menus;
+namespace Telidraw.Views.Menus;
 
 /// <summary>
 /// Renders a <see cref="MenuNode"/> tree into two concrete Avalonia surfaces:

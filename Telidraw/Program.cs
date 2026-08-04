@@ -8,7 +8,7 @@ using System.Reflection;
 using System.Text.Json;
 using SixLabors.ImageSharp.Formats.Gif;
 
-namespace NAPLPSApp;
+namespace Telidraw;
 
 sealed class Program
 {
@@ -66,7 +66,7 @@ sealed class Program
     {
         Console.WriteLine($"Telidraw v{Version}");
         Console.WriteLine();
-        Console.WriteLine("Usage: NAPLPSApp [command] [options]");
+        Console.WriteLine("Usage: Telidraw [command] [options]");
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  info <file> [--format=text|json]        Display file information");
@@ -104,17 +104,17 @@ sealed class Program
         Console.WriteLine("  --output=<file>       Output file for visual diff (default: diff.png)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
-        Console.WriteLine("  NAPLPSApp info myfile.nap");
-        Console.WriteLine("  NAPLPSApp info myfile.nap --format=json");
-        Console.WriteLine("  NAPLPSApp export myfile.nap output.png");
-        Console.WriteLine("  NAPLPSApp export myfile.nap --format=gif output.gif");
-        Console.WriteLine("  NAPLPSApp export myfile.nap --format=gif --loop --delay=10 output.gif");
-        Console.WriteLine("  NAPLPSApp export myfile.nap --stdout > output.png");
-        Console.WriteLine("  NAPLPSApp export --batch Examples/ --format=png");
-        Console.WriteLine("  NAPLPSApp export --batch Examples/ --output-dir=output/ --format=gif");
-        Console.WriteLine("  NAPLPSApp export building.nap --palette-anim --loop --frames=300 anim.gif");
-        Console.WriteLine("  NAPLPSApp diff file1.nap file2.nap");
-        Console.WriteLine("  NAPLPSApp diff file1.nap file2.nap --mode=visual --output=diff.png");
+        Console.WriteLine("  Telidraw info myfile.nap");
+        Console.WriteLine("  Telidraw info myfile.nap --format=json");
+        Console.WriteLine("  Telidraw export myfile.nap output.png");
+        Console.WriteLine("  Telidraw export myfile.nap --format=gif output.gif");
+        Console.WriteLine("  Telidraw export myfile.nap --format=gif --loop --delay=10 output.gif");
+        Console.WriteLine("  Telidraw export myfile.nap --stdout > output.png");
+        Console.WriteLine("  Telidraw export --batch Examples/ --format=png");
+        Console.WriteLine("  Telidraw export --batch Examples/ --output-dir=output/ --format=gif");
+        Console.WriteLine("  Telidraw export building.nap --palette-anim --loop --frames=300 anim.gif");
+        Console.WriteLine("  Telidraw diff file1.nap file2.nap");
+        Console.WriteLine("  Telidraw diff file1.nap file2.nap --mode=visual --output=diff.png");
     }
 
     private static int HandleInfoCommand(string[] args)
@@ -122,7 +122,7 @@ sealed class Program
         if (args.Length < 2)
         {
             Console.Error.WriteLine("Error: No input file specified.");
-            Console.Error.WriteLine("Usage: NAPLPSApp info <file> [--format=text|json]");
+            Console.Error.WriteLine("Usage: Telidraw info <file> [--format=text|json]");
             return 1;
         }
 
@@ -224,7 +224,7 @@ sealed class Program
         if (args.Length < 2)
         {
             Console.Error.WriteLine("Error: No input file specified.");
-            Console.Error.WriteLine("Usage: NAPLPSApp export <file|--batch dir> [output] [--format=png|gif|apng] [--size=WxH] [--stdout]");
+            Console.Error.WriteLine("Usage: Telidraw export <file|--batch dir> [output] [--format=png|gif|apng] [--size=WxH] [--stdout]");
             return 1;
         }
 
@@ -574,7 +574,7 @@ sealed class Program
 
     /// <summary>
     /// Compile a Telidraw source file (.td) to a NAPLPS binary (.nap).
-    /// Usage: NAPLPSApp compile input.td [-o output.nap]
+    /// Usage: Telidraw compile input.td [-o output.nap]
     /// When -o is omitted, output goes to input.nap next to the source.
     /// </summary>
     private static int HandleCompileCommand(string[] args)
@@ -582,7 +582,7 @@ sealed class Program
         if (args.Length < 2)
         {
             Console.Error.WriteLine("Error: Telidraw source file required.");
-            Console.Error.WriteLine("Usage: NAPLPSApp compile <file.td> [-o <output.nap>]");
+            Console.Error.WriteLine("Usage: Telidraw compile <file.td> [-o <output.nap>]");
             return 1;
         }
 
@@ -674,7 +674,7 @@ sealed class Program
         if (args.Length < 3)
         {
             Console.Error.WriteLine("Error: Two input files required.");
-            Console.Error.WriteLine("Usage: NAPLPSApp diff <file1> <file2> [--mode=visual|text] [--size=WxH] [--output=file]");
+            Console.Error.WriteLine("Usage: Telidraw diff <file1> <file2> [--mode=visual|text] [--size=WxH] [--output=file]");
             return 1;
         }
 
@@ -984,7 +984,7 @@ sealed class Program
 
     public static async Task ShowAboutBox()
     {
-        var iconBitmap = new Bitmap(AssetLoader.Open(new Uri("avares://NAPLPSApp/Assets/naplps.ico")));
+        var iconBitmap = new Bitmap(AssetLoader.Open(new Uri("avares://Telidraw/Assets/naplps.ico")));
 
         var bigDescription = "The North American Presentation Level Protocol Syntax (NAPLPS) was a pioneering \ngraphic display standard that emerged during the early era of online services. \nAlthough largely confined to videotex and teletext experiments, it represented a \nmeaningful step toward a unified way of depicting graphics across disparate \nterminals. NAPLPS introduced vector-based images, scalable fonts, and a color \npalette that was advanced for its time, influencing subsequent standards.";
 
@@ -1011,7 +1011,7 @@ sealed class Program
 
     public static async Task<bool> ShowQuestionDialogBox(Window owner, string title, string question)
     {
-        var iconBitmap = new Bitmap(AssetLoader.Open(new Uri("avares://NAPLPSApp/Assets/naplps.ico")));
+        var iconBitmap = new Bitmap(AssetLoader.Open(new Uri("avares://Telidraw/Assets/naplps.ico")));
 
         var messageBoxParams = new MessageBoxCustomParams
         {

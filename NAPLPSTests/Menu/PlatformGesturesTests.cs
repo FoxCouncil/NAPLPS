@@ -1,7 +1,7 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
 using Avalonia.Input;
-using NAPLPSApp.Resources;
+using Telidraw.Resources;
 
 namespace NAPLPSTests.Menu;
 

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
-namespace NAPLPSApp.Editor.Tools;
+namespace Telidraw.Editor.Tools;
 
 /// <summary>
 /// Approximation of a fill/flood tool. NAPLPS has no true flood operation, so this tool

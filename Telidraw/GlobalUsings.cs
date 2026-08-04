@@ -6,10 +6,10 @@ global using System.Numerics;
 global using IOPath = System.IO.Path;
 
 // App
-global using NAPLPSApp.ViewModels;
-global using NAPLPSApp.Views;
-global using NAPLPSApp.Classes;
-global using NAPLPSApp.Editor;
+global using Telidraw.ViewModels;
+global using Telidraw.Views;
+global using Telidraw.Classes;
+global using Telidraw.Editor;
 
 // NAPLPS
 global using NAPLPS;

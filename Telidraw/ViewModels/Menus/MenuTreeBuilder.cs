@@ -1,8 +1,8 @@
 ﻿// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
-using NAPLPSApp.Resources;
+using Telidraw.Resources;
 
-namespace NAPLPSApp.ViewModels.Menus;
+namespace Telidraw.ViewModels.Menus;
 
 /// <summary>
 /// Builds the complete menu tree that drives both the in-window <c>Menu</c> and

@@ -2,7 +2,7 @@
 
 using SixLabors.ImageSharp.Formats.Bmp;
 
-namespace NAPLPSApp;
+namespace Telidraw;
 
 public static class Extensions
 {

@@ -2,13 +2,13 @@
 
 using Avalonia.Media;
 
-namespace NAPLPSApp.Icons;
+namespace Telidraw.Icons;
 
 public static class FontAwesome
 {
-    public static readonly FontFamily Solid   = new("avares://NAPLPSApp/Assets/fa7-solid.otf#Font Awesome 7 Free Solid");
-    public static readonly FontFamily Regular = new("avares://NAPLPSApp/Assets/fa7-regular.otf#Font Awesome 7 Free");
-    public static readonly FontFamily Brand   = new("avares://NAPLPSApp/Assets/fa7-brand.otf#Font Awesome 7 Brands");
+    public static readonly FontFamily Solid   = new("avares://Telidraw/Assets/fa7-solid.otf#Font Awesome 7 Free Solid");
+    public static readonly FontFamily Regular = new("avares://Telidraw/Assets/fa7-regular.otf#Font Awesome 7 Free");
+    public static readonly FontFamily Brand   = new("avares://Telidraw/Assets/fa7-brand.otf#Font Awesome 7 Brands");
 
     public static readonly IReadOnlyDictionary<string, char> Glyphs = new Dictionary<string, char>
     {

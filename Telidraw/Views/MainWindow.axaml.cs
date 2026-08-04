@@ -5,13 +5,13 @@ using Avalonia.Interactivity;
 using AvaloniaEdit;
 using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Highlighting.Xshd;
-using NAPLPSApp.Editor;
-using NAPLPSApp.Editor.Tools;
-using NAPLPSApp.Resources;
-using NAPLPSApp.ViewModels.Menus;
-using NAPLPSApp.Views.Menus;
+using Telidraw.Editor;
+using Telidraw.Editor.Tools;
+using Telidraw.Resources;
+using Telidraw.ViewModels.Menus;
+using Telidraw.Views.Menus;
 
-namespace NAPLPSApp.Views;
+namespace Telidraw.Views;
 
 public partial class MainWindow : Window
 {

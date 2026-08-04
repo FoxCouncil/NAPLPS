@@ -1,6 +1,6 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
-namespace NAPLPSApp.Editor;
+namespace Telidraw.Editor;
 
 /// <summary>
 /// Process-static clipboard for NAPLPS commands. Holds a snapshot of opcode+operands tuples

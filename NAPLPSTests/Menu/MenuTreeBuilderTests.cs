@@ -1,9 +1,9 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
 using Avalonia.Input;
-using NAPLPSApp.Resources;
-using NAPLPSApp.ViewModels;
-using NAPLPSApp.ViewModels.Menus;
+using Telidraw.Resources;
+using Telidraw.ViewModels;
+using Telidraw.ViewModels.Menus;
 
 namespace NAPLPSTests.Menu;
 

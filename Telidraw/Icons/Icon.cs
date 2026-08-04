@@ -3,7 +3,7 @@
 using Avalonia;
 using Avalonia.Controls;
 
-namespace NAPLPSApp.Icons;
+namespace Telidraw.Icons;
 
 public class Icon : TextBlock
 {

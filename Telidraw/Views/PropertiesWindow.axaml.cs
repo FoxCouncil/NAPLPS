@@ -2,7 +2,7 @@
 
 using Avalonia.Interactivity;
 
-namespace NAPLPSApp.Views;
+namespace Telidraw.Views;
 
 public partial class PropertiesWindow : Window
 {

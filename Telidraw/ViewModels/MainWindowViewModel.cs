@@ -4,10 +4,10 @@ using Avalonia.Platform.Storage;
 
 using MsBox.Avalonia;
 
-using NAPLPSApp.Editor;
-using NAPLPSApp.Editor.Tools;
+using Telidraw.Editor;
+using Telidraw.Editor.Tools;
 
-namespace NAPLPSApp.ViewModels;
+namespace Telidraw.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase, IDisposable
 {

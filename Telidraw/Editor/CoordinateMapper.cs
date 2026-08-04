@@ -1,6 +1,6 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
-namespace NAPLPSApp.Editor;
+namespace Telidraw.Editor;
 
 /// <summary>
 /// Converts between Avalonia pointer position and NAPLPS normalized coordinates,

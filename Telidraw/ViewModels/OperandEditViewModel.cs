@@ -1,6 +1,6 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
-namespace NAPLPSApp.ViewModels;
+namespace Telidraw.ViewModels;
 
 /// <summary>
 /// Drives the OperandEditWindow. Shows the target command's current opcode and operands,

@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace NAPLPSApp.Editor;
+namespace Telidraw.Editor;
 
 /// <summary>
 /// Reads/writes layer membership in Telidraw (.td) source via structured line comments.

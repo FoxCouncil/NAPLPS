@@ -2,7 +2,7 @@
 
 using System.Numerics;
 
-namespace NAPLPSApp.Editor.Tools;
+namespace Telidraw.Editor.Tools;
 
 /// <summary>
 /// Multi-click polygon tool. Click adds vertices, double-click finalizes.

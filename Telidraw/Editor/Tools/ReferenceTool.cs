@@ -1,6 +1,6 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
-namespace NAPLPSApp.Editor.Tools;
+namespace Telidraw.Editor.Tools;
 
 /// <summary>
 /// Interact with the reference image overlay: click-drag anywhere inside the image to

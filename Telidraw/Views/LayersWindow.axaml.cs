@@ -1,8 +1,8 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
-using NAPLPSApp.Editor;
+using Telidraw.Editor;
 
-namespace NAPLPSApp.Views;
+namespace Telidraw.Views;
 
 public partial class LayersWindow : Window
 {

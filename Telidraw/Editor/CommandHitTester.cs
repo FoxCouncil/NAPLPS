@@ -1,6 +1,6 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
-namespace NAPLPSApp.Editor;
+namespace Telidraw.Editor;
 
 /// <summary>
 /// Hit-tests NAPLPS commands against a normalized coordinate point.

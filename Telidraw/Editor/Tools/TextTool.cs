@@ -2,7 +2,7 @@
 
 using System.ComponentModel;
 
-namespace NAPLPSApp.Editor.Tools;
+namespace Telidraw.Editor.Tools;
 
 /// <summary>
 /// Click to set insertion point, then type to buffer characters. Commits on Enter or

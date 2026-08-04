@@ -7,7 +7,7 @@
 
 using System.Diagnostics.CodeAnalysis;
 
-[assembly: SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "<Pending>", Scope = "member", Target = "~M:NAPLPSApp.ViewModels.MainWindowViewModel.About~System.Threading.Tasks.Task")]
-[assembly: SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "<Pending>", Scope = "member", Target = "~M:NAPLPSApp.ViewModels.MainWindowViewModel.Help~System.Threading.Tasks.Task")]
-[assembly: SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "<Pending>", Scope = "member", Target = "~M:NAPLPSApp.ViewModels.MainWindowViewModel.GitHub~System.Threading.Tasks.Task")]
-[assembly: SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "<Pending>", Scope = "member", Target = "~M:NAPLPSApp.ViewModels.MainWindowViewModel.ToggleLayers~System.Threading.Tasks.Task")]
+[assembly: SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "<Pending>", Scope = "member", Target = "~M:Telidraw.ViewModels.MainWindowViewModel.About~System.Threading.Tasks.Task")]
+[assembly: SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "<Pending>", Scope = "member", Target = "~M:Telidraw.ViewModels.MainWindowViewModel.Help~System.Threading.Tasks.Task")]
+[assembly: SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "<Pending>", Scope = "member", Target = "~M:Telidraw.ViewModels.MainWindowViewModel.GitHub~System.Threading.Tasks.Task")]
+[assembly: SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "<Pending>", Scope = "member", Target = "~M:Telidraw.ViewModels.MainWindowViewModel.ToggleLayers~System.Threading.Tasks.Task")]

@@ -2,7 +2,7 @@
 
 using Avalonia.Input;
 
-namespace NAPLPSApp.Resources;
+namespace Telidraw.Resources;
 
 public sealed record PlatformGestureSet(
     KeyGesture Undo,

@@ -3,7 +3,7 @@
 using System.Windows.Input;
 using Avalonia.Input;
 
-namespace NAPLPSApp.ViewModels.Menus;
+namespace Telidraw.ViewModels.Menus;
 
 public enum MenuToggle
 {

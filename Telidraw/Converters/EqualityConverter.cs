@@ -2,7 +2,7 @@
 
 using System.Globalization;
 
-namespace NAPLPSApp.Converters;
+namespace Telidraw.Converters;
 
 public class EqualityConverter : EqualBaseConverter
 {

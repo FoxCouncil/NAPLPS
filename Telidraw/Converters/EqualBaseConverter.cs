@@ -4,7 +4,7 @@ using Avalonia.Data;
 using Avalonia.Data.Converters;
 using System.Globalization;
 
-namespace NAPLPSApp.Converters;
+namespace Telidraw.Converters;
 
 public abstract class EqualBaseConverter : IValueConverter
 {

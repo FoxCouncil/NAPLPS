@@ -1,4 +1,4 @@
-﻿namespace NAPLPSApp.ViewModels;
+﻿namespace Telidraw.ViewModels;
 
 public enum ExportFormat
 {

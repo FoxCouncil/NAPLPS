@@ -2,7 +2,7 @@
 
 using Avalonia;
 
-namespace NAPLPSApp.Icons;
+namespace Telidraw.Icons;
 
 public static class MenuItem
 {

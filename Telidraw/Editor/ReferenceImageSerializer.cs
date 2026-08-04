@@ -3,7 +3,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-namespace NAPLPSApp.Editor;
+namespace Telidraw.Editor;
 
 /// <summary>
 /// Reads/writes a single-line `// ref-image:` directive embedded in Telidraw (.td) source.

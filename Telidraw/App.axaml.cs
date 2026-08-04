@@ -3,9 +3,9 @@
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
-using NAPLPSApp.Resources;
+using Telidraw.Resources;
 
-namespace NAPLPSApp;
+namespace Telidraw;
 
 public partial class App : Application
 {

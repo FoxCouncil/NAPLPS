@@ -1,8 +1,8 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-			 xmlns:vm="using:NAPLPSApp.ViewModels"
-             x:Class="NAPLPSApp.App"
-             xmlns:local="using:NAPLPSApp"
+			 xmlns:vm="using:Telidraw.ViewModels"
+             x:Class="Telidraw.App"
+             xmlns:local="using:Telidraw"
 			 x:DataType="vm:AppViewModel"
 			 Name="Telidraw"
              RequestedThemeVariant="Default">
