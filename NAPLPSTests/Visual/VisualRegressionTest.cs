@@ -71,6 +71,10 @@ public class VisualRegressionTest
         catch (Exception ex)
         {
             VisualTestContext.Results[relativePath] = new VisualTestResult(relativePath, VisualTestStatus.Error, baselinePath, null, null, 0, 0, 0, ex.Message);
+
+            // A file that cannot render is a regression, not a bookkeeping row: without
+            // this, a crash during render records Error and the suite stays green.
+            failures.Add(relativePath);
             return;
         }
 
@@ -105,6 +109,11 @@ public class VisualRegressionTest
         catch (Exception ex)
         {
             VisualTestContext.Results[relativePath] = new VisualTestResult(relativePath, VisualTestStatus.Error, baselinePath, actualPath, null, 0, 0, 0, ex.Message);
+
+            // A file that cannot render is a regression, not a bookkeeping row: without
+            // this, a crash during render or compare records Error and the suite stays
+            // green.
+            failures.Add(relativePath);
         }
     }
 }
