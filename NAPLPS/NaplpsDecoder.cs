@@ -67,6 +67,11 @@ public sealed class NaplpsDecoder
     /// <summary>The unexpected exception that killed the parse, if any; see <see cref="Feed"/>.</summary>
     private ExceptionDispatchInfo? _fault;
 
+    /// <summary>True once an unexpected exception has faulted the parse; only a reset (or a
+    /// fresh decoder) recovers. Read by drivers that must distinguish a dead stream from one
+    /// merely paused mid-command.</summary>
+    public bool IsFaulted => _fault is not null;
+
     /// <summary>Bytes received but not yet resolved into a complete command.</summary>
     public int PendingByteCount => _source is null ? 0 : (int)(_source.TotalWritten - _boundaryPosition);
 
@@ -134,6 +139,8 @@ public sealed class NaplpsDecoder
     /// InvalidOperationException naming the original fault. Recover by creating a new decoder
     /// (or resetting the owning session). No known wire input throws; the parse layer records
     /// stream errors instead.
+    /// Commands the faulting feed itself had completed are discarded with it - the fault
+    /// surfaces in their place and nothing from that call is delivered.
     /// </summary>
     public List<NaplpsSequence> Feed(ReadOnlySpan<byte> bytes)
     {

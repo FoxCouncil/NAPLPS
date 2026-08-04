@@ -116,11 +116,11 @@ NAPLPS_IMPORT int32_t naplps_version(uint8_t* out_buf, int32_t out_buf_len);
  * stream errors rather than failing the call, so a malformed stream leaves the
  * framebuffer untouched. An append is NOT transactional - it consumes bytes into live
  * decoder state as it goes and cannot be rolled back. On an unexpected exception (-1)
- * the context settles to the last command boundary; commands that append DID complete
- * are retained but not yet reported - they are included in, and first painted after,
- * the return count of the next successful naplps_ctx_append or naplps_ctx_flush, so
- * per-call count deltas across a -1 do not attribute commands to the call that
- * completed them.
+ * the context's decoder is FAULTED: the parse, suspended mid-stream, cannot be
+ * resumed, commands the failing append had completed are dropped, and every later
+ * naplps_ctx_append or naplps_ctx_flush on the context returns -1 reporting the
+ * original fault. naplps_ctx_reset (or a fresh context) recovers. No known wire
+ * input faults - the parse layer records stream errors instead of throwing.
  * A render failure (a library bug, not a stream condition) surfaces from naplps_ctx_exec_to / naplps_ctx_exec_next and
  * may leave the framebuffer partially painted at the reported index.
  *
@@ -233,7 +233,8 @@ NAPLPS_IMPORT int32_t   naplps_ctx_exec_next(NaplpsCtx ctx, NaplpsRect* out_dirt
  * Returns the new total command count; -3 for a non-finite coordinate or size, when
  * the stream currently ends inside an unfinished macro/DRCS/texture definition (the
  * bytes would be swallowed into the definition), is paused mid-command, or is not yet
- * established; or a negative error code. */
+ * established, or the context has faulted (reset to recover); or a negative error
+ * code. */
 NAPLPS_IMPORT int32_t   naplps_ctx_draw_text(NaplpsCtx ctx,
                                              double x, double y,
                                              int32_t fg, int32_t bg,
@@ -260,8 +261,9 @@ NAPLPS_IMPORT int32_t   naplps_ctx_draw_text(NaplpsCtx ctx,
  * either - like draw_text, call it over any prior stream at a command boundary.
  *
  * Returns the new total command count; -3 for a non-positive or non-finite argument,
- * when the stream ends inside an unfinished definition, is paused mid-command, or is
- * not yet established; or a negative error code. */
+ * when the stream ends inside an unfinished definition, is paused mid-command, is not
+ * yet established, or the context has faulted (reset to recover); or a negative error
+ * code. */
 NAPLPS_IMPORT int32_t   naplps_ctx_fill_rect(NaplpsCtx ctx,
                                              double x, double y,
                                              double w, double h,

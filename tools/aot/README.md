@@ -302,7 +302,7 @@ Error codes (negative return values):
 
 | Code | Meaning |
 |---|---|
-| -1 | Parse error or exception (a failed append settles to the last command boundary - see the failure model in naplps.h; stateless calls have no effect) |
+| -1 | Unexpected exception: the context's decoder is faulted and every later append or flush reports -1 until `naplps_ctx_reset` - see the failure model in naplps.h (stateless calls have no effect) |
 | -2 | Output buffer too small |
 | -3 | Invalid input (null pointer, non-positive length, bad argument or state) |
 | -4 | Status, not an error: `exec_next` past the last command, `exec_to` before anything is paintable |
