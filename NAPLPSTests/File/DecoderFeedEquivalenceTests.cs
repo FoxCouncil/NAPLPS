@@ -253,4 +253,62 @@ public class DecoderFeedEquivalenceTests
         Assert.AreEqual(0x1B, emitted[0].Command.OpCode);
         Assert.AreEqual(0, decoder.PendingByteCount);
     }
+
+    /// <summary>
+    /// X3.110 6.2.2 chained definitions (a DEF terminated by the next DEF, no END): the
+    /// terminating DEF byte hands off to normal command processing, which can defer on its
+    /// name byte or operand list. That handoff must be deferred WHOLE - closing the
+    /// definition first and unwinding on the handoff retracted the body commands while the
+    /// close stood, so a retry skipped them forever.
+    /// </summary>
+    [TestMethod]
+    public void ChainedDefinition_TerminatorAtTheFrontier_LosesNothing()
+    {
+        // DEF MACRO 'A' (name 0xAB), one raw body byte 0x0F, terminated by the next DEF
+        // MACRO whose name byte is still in flight when the terminator arrives.
+        byte[] chained = [0x80, 0xAB, 0x0F, 0x81];
+
+        var oneShot = OneShot(chained, NaplpsSystemType.NAPLPS);
+        var byteAtATime = Streamed(chained, NaplpsSystemType.NAPLPS, Fixed(1, chained.Length));
+
+        Assert.AreEqual(oneShot.Commands, byteAtATime.Commands,
+            FirstDifference(oneShot.Commands, byteAtATime.Commands));
+        Assert.AreEqual(oneShot.State, byteAtATime.State);
+
+        // The frontier variant: the terminator AND a numeric name byte arrive in one chunk,
+        // but the name's operand list is still open - the handoff must defer then too.
+        byte[] frontier = [0x80, 0xAB, 0x0F, 0x81, 0x22, 0x41];
+
+        var reference = OneShot(frontier, NaplpsSystemType.NAPLPS);
+        var split = Streamed(frontier, NaplpsSystemType.NAPLPS, [5, 1]);
+
+        Assert.AreEqual(reference.Commands, split.Commands,
+            FirstDifference(reference.Commands, split.Commands));
+        Assert.AreEqual(reference.State, split.State);
+    }
+
+    /// <summary>
+    /// The pixel-affecting shape of the same bug: a DEFP MACRO (define-and-display) chained
+    /// into the next definition loses its entire drawn replay on the wire path - a session
+    /// never paints what the one-shot path paints.
+    /// </summary>
+    [TestMethod]
+    public void ChainedDefpReplay_SurvivesEveryChunking()
+    {
+        // DEFP MACRO '!' with a LINE SET body, terminated by DEF MACRO '"' then END.
+        byte[] bytes = [0x81, 0x21, 0xA9, 0xC0, 0xC1, 0xC2, 0x80, 0x22, 0x85];
+
+        var oneShot = OneShot(bytes, NaplpsSystemType.NAPLPS);
+
+        StringAssert.Contains(oneShot.Commands, "~", "the DEFP replay must be present as synthetic output");
+
+        for (int size = 1; size <= 3; size++)
+        {
+            var streamed = Streamed(bytes, NaplpsSystemType.NAPLPS, Fixed(size, bytes.Length));
+
+            Assert.AreEqual(oneShot.Commands, streamed.Commands,
+                $"[{size}-byte chunks] " + FirstDifference(oneShot.Commands, streamed.Commands));
+            Assert.AreEqual(oneShot.State, streamed.State, $"[{size}-byte chunks] state diverged");
+        }
+    }
 }

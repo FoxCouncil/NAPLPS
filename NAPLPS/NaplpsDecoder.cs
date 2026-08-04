@@ -616,6 +616,45 @@ public sealed class NaplpsDecoder
             // (TL80TB10) chain dozens of definitions this way with no ENDs at all.
             bool defTerminated = !escEnd && !IsEndCommand(opcode) && IsDefinitionCommand(opcode);
 
+            // The terminating DEF byte is handed back to normal command processing below,
+            // which reads its operand list (or name byte) and DEFERS if those bytes run to
+            // the frontier. That unwind would retract the body and replay commands emitted
+            // here while the definition-close state mutations stood - the retry skips the
+            // closed definition and the commands are lost for good. So defer the WHOLE
+            // handoff, before any mutation, unless the terminator's own command is
+            // decidable from the bytes that have arrived: a non-numeric byte must
+            // terminate its operand run (an empty run's first byte then serves as the
+            // name). Skipped when spliced bytes are pending - a peek there would consume
+            // the injection queue - which keeps this exact for the real-stream case.
+            if (defTerminated && ReferenceEquals(reader, _streamingReader) && !_atStreamEnd)
+            {
+                if (reader.IsEOF())
+                {
+                    NeedMoreData(reader);
+                }
+
+                if (reader is not SpliceBinaryReader { InjectedRemaining: > 0 })
+                {
+                    var scan = reader.BaseStream.Position;
+                    bool listTerminated = false;
+                    while (reader.BaseStream.Position < reader.BaseStream.Length)
+                    {
+                        var next = (byte)reader.BaseStream.ReadByte();
+                        if (State.InUseTable[next]?.CommandType != typeof(NumericalDataCommand))
+                        {
+                            listTerminated = true;
+                            break;
+                        }
+                    }
+
+                    reader.BaseStream.Position = scan;
+                    if (!listTerminated)
+                    {
+                        NeedMoreData(reader);
+                    }
+                }
+            }
+
             if (escEnd || defTerminated || IsEndCommand(opcode))
             {
                 var macroName = State.MacroBeingDefined.Value;
