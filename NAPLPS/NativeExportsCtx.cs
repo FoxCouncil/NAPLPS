@@ -11,12 +11,13 @@ namespace NAPLPS;
 /// and blit raw pixels without PNG round-trips. Semantics live on the session class;
 /// the C contract lives in tools/aot/include/naplps.h.
 ///
-/// Error codes: -1 exception/parse failure (the context settles to the last command
-/// boundary: commands decoded before the failure stand, the unconsumed tail stays
-/// pending, a retry resumes from the boundary, and the settled commands are reported by
-/// the next successful append or flush - see naplps.h: appends are NOT transactional as
-/// a whole), -3 invalid argument or invalid state, -5 bad handle. -4 is a status, not
-/// an error: exec_next past the last command, exec_to before anything is paintable.
+/// Error codes: -1 exception/parse failure (an unexpected exception FAULTS the context's
+/// decoder: the suspended parse cannot be resumed, every later append or flush on the
+/// context reports -1 naming the original fault, and naplps_ctx_reset or a fresh context
+/// recovers - see naplps.h's failure model; no known wire input faults, the parse layer
+/// records stream errors instead), -3 invalid argument or invalid state, -5 bad handle.
+/// -4 is a status, not an error: exec_next past the last command, exec_to before anything
+/// is paintable.
 ///
 /// Thread safety: the handle table is locked; a single context must not be used from
 /// multiple threads concurrently (one context per thread of use). The framebuffer
@@ -258,8 +259,8 @@ public static unsafe class NativeExportsCtx
     /// SELECT COLOR, optional TEXT character size, text bytes); execute it via
     /// exec_next/exec_to like any appended bytes. Returns the new total command count;
     /// -3 for a non-finite coordinate, when the stream ends inside an unfinished
-    /// macro/DRCS/texture definition, is paused mid-command, or is not yet established;
-    /// or a negative error code. See naplps.h for parameter semantics.
+    /// macro/DRCS/texture definition, is paused mid-command, is not yet established, or
+    /// the context has faulted (reset to recover); or a negative error code. See naplps.h for parameter semantics.
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_draw_text")]
     public static int DrawText(nint handle, double x, double y, int fg, int bg,
@@ -297,8 +298,8 @@ public static unsafe class NativeExportsCtx
     /// FILLED) at (x, y) lower-left with size (w, h), all rounded to the wire grid -
     /// the block-cursor / cell-repaint primitive. Executes via exec_next/exec_to like any
     /// appended bytes. Returns the new total command count, -3 for a non-positive size or
-    /// inside an unfinished definition, is paused mid-command, or is not yet
-    /// established; or a negative error code.
+    /// inside an unfinished definition, is paused mid-command, is not yet established,
+    /// or the context has faulted (reset to recover); or a negative error code.
     /// </summary>
     [UnmanagedCallersOnly(EntryPoint = "naplps_ctx_fill_rect")]
     public static int FillRect(nint handle, double x, double y, double w, double h, int color)

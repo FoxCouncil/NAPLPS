@@ -325,8 +325,8 @@ public class StreamSessionTests
         Assert.ThrowsExactly<InvalidOperationException>(() =>
             line.FillRect(0.1, 0.1, 0.05, 0.05, 6));
 
-        // A deferred macro expansion: the tail lives in the injection queue while zero
-        // real bytes are pending - the gate must see it there too. Designate the macro
+        // A deferred macro expansion: the parser is suspended mid-expansion while zero
+        // real bytes are pending - the gate must see that too. Designate the macro
         // set into G3 and lock-shift it, DEF MACRO '!' whose body is a bare REPEAT
         // opcode, END, then invoke '!' as the last byte of the append: the spliced
         // REPEAT defers awaiting its count while the pending buffer is empty.

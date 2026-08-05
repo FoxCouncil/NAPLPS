@@ -11,7 +11,7 @@ namespace NAPLPSTests.File;
 /// chunking must produce the same commands, in the same order, with the same final decoder
 /// state, as decoding the whole buffer in one call.
 ///
-/// This is the direct test of the deferral machinery. Where the session-level gate in
+/// This is the direct test of the byte-frontier discipline. Where the session-level gate in
 /// <see cref="StreamSessionEquivalenceTests"/> compares rendered pixels and so can only afford
 /// coarse chunkings over the corpus, this one compares command lists - no rasterization - so it
 /// can afford ONE BYTE AT A TIME over every example file. Every operand list, escape sequence,
@@ -254,10 +254,11 @@ public class DecoderFeedEquivalenceTests
 
     /// <summary>
     /// X3.110 6.2.2 chained definitions (a DEF terminated by the next DEF, no END): the
-    /// terminating DEF byte hands off to normal command processing, which can defer on its
-    /// name byte or operand list. That handoff must be deferred WHOLE - closing the
-    /// definition first and unwinding on the handoff retracted the body commands while the
-    /// close stood, so a retry skipped them forever.
+    /// terminating DEF byte both closes the open definition and starts its own command,
+    /// whose name byte or operand list may still be in flight. Whatever the engine does at
+    /// that boundary (the retry-era code deferred the whole handoff; the resumable parser
+    /// closes the definition and suspends on the terminator's own bytes), no body or
+    /// replay command may be lost and the outcome must match the one-shot decode.
     /// </summary>
     [TestMethod]
     public void ChainedDefinition_TerminatorAtTheFrontier_LosesNothing()
@@ -283,6 +284,99 @@ public class DecoderFeedEquivalenceTests
         Assert.AreEqual(reference.Commands, split.Commands,
             FirstDifference(reference.Commands, split.Commands));
         Assert.AreEqual(reference.State, split.State);
+    }
+
+    /// <summary>
+    /// The discriminating regression for mark-at-emission (repro courtesy of the upstream
+    /// maintainer). A raw DEF cannot nest - a raw DEF byte inside a body terminates the
+    /// outer capture per X3.110 6.2.2 - but an ESC-coded DEF buffers as plain body bytes
+    /// and opens only on expansion. Splitting the inner ESC-coded END so its final byte
+    /// arrives after the parser has suspended inside the inner close, with the injection
+    /// queue drained, made the retroactive-index marking miss the inner body byte and END
+    /// (one-shot ~2A ~1B vs split .2A .1B). Mark-at-emission keeps them synthetic.
+    /// </summary>
+    [TestMethod]
+    public void EscDefInsideMacroBody_SplitAtInnerEnd_MarksBodySynthetic()
+    {
+        byte[] bytes =
+        [
+            0x80, 0x21,                    // DEF MACRO '!'
+            0x1B, 0x40, 0x22,              //   body: ESC-coded DEF MACRO '"'
+            0x2A,                          //   inner body byte
+            0x1B,                          //   lone ESC, first half of the inner ESC END
+            0x85,                          // END of '!'
+            0x1B, 0x2F, 0x7A, 0x1B, 0x6F,  // designate macro set -> G3, LS3
+            0x21,                          // invoke '!'
+            0x45,                          // inner END's final byte
+        ];
+
+        var oneShot = OneShot(bytes, NaplpsSystemType.NAPLPS);
+
+        StringAssert.Contains(oneShot.Commands, "~2A", "the in-body ESC-def replay must be synthetic");
+
+        // Feed everything except the trailing 0x45, then 0x45 alone.
+        var split = Streamed(bytes, NaplpsSystemType.NAPLPS, new[] { bytes.Length - 1 });
+
+        Assert.AreEqual(oneShot.Commands, split.Commands,
+            FirstDifference(oneShot.Commands, split.Commands));
+    }
+
+    /// <summary>
+    /// A definition INSIDE a macro body: invoking the macro replays that definition as
+    /// presentation output, so its emitted sequences are synthetic. The synthetic flag must
+    /// be set at emission, not retroactively by index - a byte-at-a-time feed clears and
+    /// harvests the emission list across the expansion's suspensions, so an index captured
+    /// before the expansion is stale afterwards. The fingerprint encodes IsSynthetic, so a
+    /// one-shot vs byte-at-a-time mismatch here is exactly a lost synthetic mark.
+    /// </summary>
+    [TestMethod]
+    public void DefinitionInsideMacroBody_MarksReplaySyntheticAcrossChunking()
+    {
+        // DEF MACRO '!' whose body is a DEFP MACRO '"' (define-and-display) with a LINE SET
+        // body; then designate the macro set into G3, lock-shift, and invoke '!'.
+        byte[] bytes =
+        [
+            0x80, 0x21,                                     // DEF MACRO '!'
+            0x81, 0x22, 0xA9, 0xC0, 0xC1, 0xC2, 0x85,       //   body: DEFP MACRO '"' LINE SET, END
+            0x85,                                           // END of '!'
+            0x1B, 0x2F, 0x7A, 0x1B, 0x6F,                   // designate macro set -> G3, LS3
+            0x21,                                           // invoke '!'
+        ];
+
+        var oneShot = OneShot(bytes, NaplpsSystemType.NAPLPS);
+
+        StringAssert.Contains(oneShot.Commands, "~", "the in-body DEFP replay must emit synthetic output");
+
+        for (int size = 1; size <= 3; size++)
+        {
+            var streamed = Streamed(bytes, NaplpsSystemType.NAPLPS, Fixed(size, bytes.Length));
+
+            Assert.AreEqual(oneShot.Commands, streamed.Commands,
+                $"[{size}-byte chunks] " + FirstDifference(oneShot.Commands, streamed.Commands));
+        }
+    }
+
+    /// <summary>
+    /// Flush ends a STREAM, not the decoder: a later feed starts a fresh stream over the
+    /// same live state, so definitions and codings established before the flush govern
+    /// bytes after it.
+    /// </summary>
+    [TestMethod]
+    public void FeedAfterFlush_CarriesLiveState()
+    {
+        var decoder = MakeDecoder(NaplpsSystemType.NAPLPS);
+
+        // DEF MACRO '!' with a LINE SET body, END - then flush the stream.
+        decoder.Feed(new byte[] { 0x80, 0x21, 0xA9, 0xC0, 0xC1, 0xC2, 0x85 });
+        decoder.Flush();
+
+        // A fresh stream on the same decoder: designate the macro set into G3, lock-shift,
+        // invoke '!' - the macro defined before the flush must expand.
+        var emitted = decoder.Feed(new byte[] { 0x1B, 0x2F, 0x7A, 0x1B, 0x6F, 0x21, 0x20 });
+        emitted.AddRange(decoder.Flush());
+
+        Assert.IsTrue(emitted.Any(seq => seq.IsSynthetic && seq.Command.OpCode == 0xA9),
+            "the pre-flush macro definition should expand in the post-flush stream");
     }
 
     /// <summary>
@@ -383,5 +477,68 @@ public class DecoderFeedEquivalenceTests
                 $"[{size}-byte chunks] " + FirstDifference(oneShot.Commands, streamed.Commands));
             Assert.AreEqual(oneShot.State, streamed.State, $"[{size}-byte chunks] state diverged");
         }
+    }
+
+    /// <summary>
+    /// The cost shape of the suspend-in-place parser: a LONG operand run fed one byte at a
+    /// time does work linear in its length. Under unwind-and-retry each feed re-parsed the
+    /// whole withheld tail, so an N-operand command trickling in cost O(N^2) parse work and
+    /// quadrupling N sixteenfolded the time; resumable parsing pins the ratio near four.
+    /// Each size is timed as the MINIMUM of several repetitions - a single shot at these
+    /// magnitudes routinely catches a GC pause and reads as a false super-linearity - and
+    /// the bound (8x) still sits far below the quadratic regime's ~16x.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("Perf")]
+    public void LongOperandRun_FedByteAtATime_DoesLinearWork()
+    {
+        static double MinCost(int operandBytes)
+        {
+            var best = double.MaxValue;
+
+            for (var rep = 0; rep < 7; rep++)
+            {
+                var decoder = MakeDecoder(NaplpsSystemType.NAPLPS);
+                var chunk = new byte[] { 0xC0 };
+
+                // POINT SET ABS followed by a numeric operand run: the command stays
+                // withheld (every prefix is byte-identical to a truncated one) until the
+                // flush ends it.
+                decoder.Feed(new byte[] { 0xA4 });
+
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+
+                for (var i = 0; i < operandBytes; i++)
+                {
+                    Assert.AreEqual(0, decoder.Feed(chunk).Count);
+                }
+
+                var emitted = decoder.Flush();
+                sw.Stop();
+
+                Assert.AreEqual(1, emitted.Count);
+                Assert.AreEqual(0xA4, emitted[0].Command.OpCode);
+                Assert.AreEqual(operandBytes, emitted[0].Command.Operands.Count);
+
+                best = Math.Min(best, sw.Elapsed.TotalMilliseconds);
+            }
+
+            return best;
+        }
+
+        // Warm the JIT and the allocator on a small run before timing anything.
+        MinCost(256);
+
+        var baseline = MinCost(2000);
+        var quadrupled = MinCost(8000);
+        var ratio = quadrupled / Math.Max(0.001, baseline);
+
+        Console.WriteLine($"2000 operand bytes: {baseline:F2} ms (min of 7)");
+        Console.WriteLine($"8000 operand bytes: {quadrupled:F2} ms (min of 7)");
+        Console.WriteLine($"ratio: {ratio:F1}x (linear = ~4.0, quadratic = ~16.0)");
+
+        Assert.IsTrue(
+            ratio <= 8.0,
+            $"quadrupling a byte-trickled operand run cost {ratio:F1}x (expected ~4x); the per-feed re-parse is back");
     }
 }
