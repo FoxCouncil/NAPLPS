@@ -87,7 +87,8 @@ sealed class Program
         Console.WriteLine("  --format=png|gif|apng Output format (default: png)");
         Console.WriteLine("  --size=WxH            Canvas size (default: 1024x768)");
         Console.WriteLine("  --at=FRAMES           Export specific frames (e.g. 1,2-5,500,1200)");
-        Console.WriteLine("  --stdout, -           Output to stdout instead of file");
+        Console.WriteLine("  --stdout, -           Output to stdout instead of file (Unix-reliable; on");
+        Console.WriteLine("                        Windows the GUI-subsystem binary pipes unreliably)");
         Console.WriteLine();
         Console.WriteLine("Batch Export Options:");
         Console.WriteLine("  --batch               Enable batch mode (input is a directory)");
@@ -107,13 +108,19 @@ sealed class Program
         Console.WriteLine("  --frames=N            Number of animation frames (default: 120)");
         Console.WriteLine();
         Console.WriteLine("Compile/Decompile Options:");
-        Console.WriteLine("  --system-type=T       Force naplps|prodigy|telidon (default: naplps for");
-        Console.WriteLine("                        compile, auto-detect for decompile)");
+        Console.WriteLine("  --system-type=T       Force naplps|prodigy|telidon. On compile it sets the");
+        Console.WriteLine("                        target system (default naplps). On decompile it forces");
+        Console.WriteLine("                        how an ambiguous stream is decoded (default auto-detect);");
+        Console.WriteLine("                        it rarely changes output for auto-detectable files.");
         Console.WriteLine("  --bare                Compile the .td as the complete byte specification");
         Console.WriteLine("                        (no CAN+NSR sentinels). Decompiler output expects");
         Console.WriteLine("                        this; it makes nap -> td -> nap byte-exact.");
         Console.WriteLine("  --stdout              Write the result to stdout (bytes for compile,");
-        Console.WriteLine("                        source for decompile); mutually exclusive with -o");
+        Console.WriteLine("                        source for decompile); mutually exclusive with -o.");
+        Console.WriteLine("                        Reliable on Unix; on Windows the app is a GUI");
+        Console.WriteLine("                        subsystem binary so piping stdout is unreliable.");
+        Console.WriteLine("  --force, -f           Overwrite a defaulted output file that exists");
+        Console.WriteLine("                        (an explicit -o always overwrites).");
         Console.WriteLine();
         Console.WriteLine("Diff Options:");
         Console.WriteLine("  --mode=text|visual    Diff mode (default: text)");
@@ -598,12 +605,13 @@ sealed class Program
     /// belongs) otherwise produces wrong bytes with a green exit code.
     /// </summary>
     private static bool TryParseConvertOptions(string[] args, bool isCompile, out string? outputPath,
-        out bool bare, out bool toStdout, out NaplpsSystemType? systemType)
+        out bool bare, out bool toStdout, out NaplpsSystemType? systemType, out bool force)
     {
         outputPath = null;
         bare = false;
         toStdout = false;
         systemType = null;
+        force = false;
 
         for (int i = 2; i < args.Length; i++)
         {
@@ -628,6 +636,10 @@ sealed class Program
             {
                 toStdout = true;
             }
+            else if (args[i] == "--force" || args[i] == "-f")
+            {
+                force = true;
+            }
             else if (args[i] == "--bare" && isCompile)
             {
                 bare = true;
@@ -640,11 +652,24 @@ sealed class Program
                 }
                 systemType = st;
             }
-            else
+            else if (args[i].StartsWith('-'))
             {
                 Console.Error.WriteLine($"Error: unknown option '{args[i]}' for {(isCompile ? "compile" : "decompile")}.");
                 return false;
             }
+            else
+            {
+                Console.Error.WriteLine($"Error: unexpected argument '{args[i]}'; the input file must come before options.");
+                return false;
+            }
+        }
+
+        // An empty -o / --output= value (e.g. `--output=`) would otherwise reach GetFullPath
+        // and throw an unhandled ArgumentException; reject it like any other bad argument.
+        if (outputPath is not null && outputPath.Length == 0)
+        {
+            Console.Error.WriteLine("Error: -o/--output requires a non-empty path.");
+            return false;
         }
 
         if (toStdout && outputPath != null)
@@ -656,12 +681,59 @@ sealed class Program
         return true;
     }
 
-    /// <summary>The default output path must never silently overwrite the input.</summary>
+    // Full-path comparison honoring the filesystem: case-insensitive only on Windows, where
+    // paths are; ordinal elsewhere, so `Foo.td` and `foo.td` are distinct on Linux.
+    private static readonly StringComparison PathComparison =
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    /// <summary>Resolves symlinks so an aliased path to the input (e.g. an -o that points at
+    /// the same file through a link) is recognized. GetFullPath alone normalizes ./.. but not
+    /// links; this resolves the file and its directory. (An ancestor-directory symlink the
+    /// leaf doesn't expose is not chased - a portable realpath is not in the BCL.)</summary>
+    private static string RealPath(string path)
+    {
+        var full = IOPath.GetFullPath(path);
+        try
+        {
+            var fi = new System.IO.FileInfo(full);
+            var target = fi.ResolveLinkTarget(returnFinalTarget: true);
+            if (target is not null) { return target.FullName; }
+
+            var dir = fi.DirectoryName;
+            if (dir is not null)
+            {
+                var dirReal = new System.IO.DirectoryInfo(dir).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? dir;
+                return IOPath.Combine(dirReal, fi.Name);
+            }
+        }
+        catch
+        {
+            // Fall through to the normalized-but-unresolved path.
+        }
+
+        return full;
+    }
+
+    /// <summary>The output path must never silently overwrite the input, including via a symlink.</summary>
     private static bool OutputCollidesWithInput(string inputPath, string outputPath)
     {
-        if (string.Equals(IOPath.GetFullPath(inputPath), IOPath.GetFullPath(outputPath), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(RealPath(inputPath), RealPath(outputPath), PathComparison))
         {
             Console.Error.WriteLine($"Error: output path {outputPath} is the input file; pass -o to choose another.");
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>A defaulted (not -o) output target must not silently clobber an existing file -
+    /// several Examples .td/.nap are hand-authored. Refuse unless --force; an explicit -o is
+    /// the caller's own choice and overwrites.</summary>
+    private static bool DefaultTargetWouldClobber(string outputPath, bool force)
+    {
+        if (!force && System.IO.File.Exists(outputPath))
+        {
+            Console.Error.WriteLine($"Error: {outputPath} already exists; pass -o to a different path or --force to overwrite.");
             return true;
         }
 
@@ -684,7 +756,7 @@ sealed class Program
 
         var inputPath = args[1];
 
-        if (!TryParseConvertOptions(args, isCompile: true, out var outputPath, out var bare, out var toStdout, out var systemType))
+        if (!TryParseConvertOptions(args, isCompile: true, out var outputPath, out var bare, out var toStdout, out var systemType, out var force))
         {
             return 1;
         }
@@ -702,9 +774,16 @@ sealed class Program
             return 1;
         }
 
+        var explicitOutput = outputPath is not null;
         outputPath ??= IOPath.ChangeExtension(inputPath, ".nap");
 
         if (!toStdout && OutputCollidesWithInput(inputPath, outputPath))
+        {
+            return 1;
+        }
+
+        // Only the DEFAULTED target is clobber-guarded; an explicit -o is the caller's choice.
+        if (!toStdout && !explicitOutput && DefaultTargetWouldClobber(outputPath, force))
         {
             return 1;
         }
@@ -771,7 +850,7 @@ sealed class Program
             }
 
             format.Save(outputPath);
-            Console.WriteLine($"Compiled {inputPath} \u2192 {outputPath} ({format.Commands.Count} commands, {new System.IO.FileInfo(outputPath).Length} bytes)");
+            Console.WriteLine($"Compiled {inputPath} -> {outputPath} ({format.Commands.Count} commands, {new System.IO.FileInfo(outputPath).Length} bytes)");
             return 0;
         }
         catch (Exception ex)
@@ -797,10 +876,12 @@ sealed class Program
 
         var inputPath = args[1];
 
-        if (!TryParseConvertOptions(args, isCompile: false, out var outputPath, out _, out var toStdout, out var forcedType))
+        if (!TryParseConvertOptions(args, isCompile: false, out var outputPath, out _, out var toStdout, out var forcedType, out var force))
         {
             return 1;
         }
+
+        var explicitOutput = outputPath is not null;
 
         if (!System.IO.File.Exists(inputPath))
         {
@@ -858,8 +939,15 @@ sealed class Program
                 return 1;
             }
 
+            // A defaulted target (foo.nap -> foo.td) must not silently clobber a hand-authored
+            // .td; several Examples pairs are exactly that. An explicit -o is the caller's choice.
+            if (!explicitOutput && DefaultTargetWouldClobber(outputPath, force))
+            {
+                return 1;
+            }
+
             System.IO.File.WriteAllText(outputPath, source);
-            Console.WriteLine($"Decompiled {inputPath} \u2192 {outputPath} ({format.Commands.Count} commands, {source.Length} chars)");
+            Console.WriteLine($"Decompiled {inputPath} -> {outputPath} ({format.Commands.Count} commands, {source.Length} chars)");
             return 0;
         }
         catch (Exception ex)
@@ -882,7 +970,6 @@ sealed class Program
                 return false;
         }
     }
-
 
     private static int HandleDiffCommand(string[] args)
     {
