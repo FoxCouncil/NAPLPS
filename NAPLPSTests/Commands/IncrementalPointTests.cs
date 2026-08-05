@@ -104,6 +104,85 @@ public class IncrementalPointTests
         }
     }
 
+    /// <summary>
+    /// 5.3.3.6.3 step 3: a row step that would exceed the active field in Y holds the Y
+    /// value constant and scrolls the field content by -dy instead of stepping. The walk
+    /// therefore keeps depositing at the held row, with one scroll event recorded per
+    /// overflowing row for the renderer to apply.
+    /// </summary>
+    [TestMethod]
+    public void YOverflow_HoldsRowAndRecordsScrollEvents()
+    {
+        var state = CreateState();
+
+        // Packing counter 2, four pels per row: rows land at y = 0, .25, .5, .75; the
+        // fifth and sixth rows overflow the unit field and scroll instead. Each row is
+        // 8 payload bits = two string bytes (the second byte's remainder flushes).
+        var rowBytes = new byte[] { 0b010101, 0b010000 };
+        var operands = new List<byte> { 2 };
+        for (var row = 0; row < 6; row++)
+        {
+            operands.AddRange(rowBytes);
+        }
+
+        var cmd = new IncrementalPointCommand(state, 0x39, new NaplpsOperands([.. operands]));
+
+        Assert.IsTrue(cmd.IsValid);
+        Assert.AreEqual(24, cmd.Deposits.Count, "four pels per row, six rows");
+        CollectionAssert.AreEqual(new[] { 16, 20 }, cmd.ScrollBreaks, "one scroll before each overflowing row's first deposit");
+
+        for (var i = 16; i < 24; i++)
+        {
+            Assert.AreEqual(0.75f, cmd.Deposits[i].Y, 1e-6f, $"deposit {i} must hold the last fitting row");
+        }
+    }
+
+    /// <summary>
+    /// The renderer applies each recorded scroll to the display image lying within the
+    /// field: content drawn before the overflow (including this command's own earlier
+    /// rows) shifts by -dy, and the held row deposits into the vacated strip.
+    /// </summary>
+    [TestMethod]
+    public void YOverflow_ScrollsFieldContentInTheRender()
+    {
+        var state = CreateState();
+        state.ColorMode = 0;
+
+        // One pel per row (field clipped to a quarter-screen column), packing 6: each
+        // string byte is one deposit and one row. Five rows against a four-row field:
+        // the fifth scrolls. Row colors (g,r,b,g,r,b interleave): 111111 white,
+        // 110000 (170,170,0), 000000 black.
+        state.Field = new NaplpsField(new Vector3(0, 0, 0), new Vector3(0.25f, 1f, 0));
+
+        var cmd = new IncrementalPointCommand(state, 0x39, new NaplpsOperands(
+        [
+            6, 0b111111, 0b110000, 0b000000, 0b000000, 0b111111
+        ]));
+
+        Assert.AreEqual(5, cmd.Deposits.Count);
+        CollectionAssert.AreEqual(new[] { 4 }, cmd.ScrollBreaks);
+
+        var size = new SixLabors.ImageSharp.Size(64, 64);
+        using var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(64, 64);
+        new NAPLPS.Drawing.DrawableIncrementalPoint(cmd).Draw(image, state, size);
+
+        int pelHeight = (int)MathF.Max(1f, MathF.Ceiling(0.25f / (float)NaplpsUtils.DisplayRatio * 64));
+
+        // The held row 5 (white) deposits at the field top, over the strip the scroll vacated.
+        var heldRowProbe = image[2, 1];
+        Assert.AreEqual((255, 255, 255), (heldRowProbe.R, heldRowProbe.G, heldRowProbe.B), "held row must deposit at the field top after the scroll");
+
+        // Row 4 (black) shifted down one pel from the field top strip.
+        var shiftedRow4Probe = image[2, 1 + pelHeight];
+        Assert.AreEqual((0, 0, 0), (shiftedRow4Probe.R, shiftedRow4Probe.G, shiftedRow4Probe.B), "row 4 must shift down one pel");
+
+        // The scroll pushed row 1 (white, deposited at the field bottom) out of the field
+        // and moved row 2 (170,170,0) into its old home. Without the scroll this probe
+        // would still read row 1's white.
+        var bottomRowProbe = image[2, 50];
+        Assert.AreEqual((170, 170, 0), (bottomRowProbe.R, bottomRowProbe.G, bottomRowProbe.B), "row 2 must occupy row 1's old home; row 1 scrolls out of the field");
+    }
+
     [TestMethod]
     public void TerminationSetsDrawingPointToFieldOrigin()
     {

@@ -31,6 +31,22 @@ public class IncrementalPointCommand : NaplpsCommand
     /// <summary>Signed logical pel (dx, dy) at execution time.</summary>
     public Vector2 PelSize { get; }
 
+    /// <summary>
+    /// Deposit indices at which the field content scrolls by -dy (5.3.3.6.3 step 3: a row
+    /// step that would exceed the active field holds Y and scrolls the display image within
+    /// the field instead). The renderer applies each scroll before drawing the deposit at
+    /// that index; an entry equal to <see cref="Deposits"/>.Count is a trailing scroll whose
+    /// row never received a deposit (the string data ran out mid-specification).
+    /// </summary>
+    public List<int> ScrollBreaks { get; } = new();
+
+    /// <summary>Active field extent at execution time (left, bottom), normalized. The unit
+    /// screen when no FIELD command has run (5.3.3.6.2).</summary>
+    public Vector2 FieldMin { get; private set; }
+
+    /// <summary>Active field extent at execution time (right, top), normalized.</summary>
+    public Vector2 FieldMax { get; private set; } = new Vector2(1f, 1f);
+
     /// <summary>Whether the command is valid (packing counter in range 1-48).</summary>
     public new bool IsValid { get; }
 
@@ -90,6 +106,9 @@ public class IncrementalPointCommand : NaplpsCommand
             top = state.Field.Top;
         }
 
+        FieldMin = new Vector2(left, bottom);
+        FieldMax = new Vector2(right, top);
+
         float dx = PelSize.X;
         float dy = PelSize.Y;
 
@@ -138,9 +157,10 @@ public class IncrementalPointCommand : NaplpsCommand
             if (!FitsX(x))
             {
                 // End of row: discard the rest of the current byte, return to the opposite
-                // X boundary, and step one pel height. A Y overflow scrolls the field on a
-                // real terminal (5.3.3.6.3 step 3); a static image render holds the row
-                // instead, which only matters for content taller than its field.
+                // X boundary, and step one pel height. When the step would exceed the field
+                // in Y, the Y value is left constant and the display image within the field
+                // scrolls by -dy instead (5.3.3.6.3 step 3): record the scroll event at the
+                // upcoming deposit index for the renderer to apply.
                 if (bitInByte != 0)
                 {
                     bitInByte = 0;
@@ -159,6 +179,10 @@ public class IncrementalPointCommand : NaplpsCommand
                 if (fitsY)
                 {
                     y = nextY;
+                }
+                else
+                {
+                    ScrollBreaks.Add(Deposits.Count);
                 }
             }
 

@@ -22,7 +22,7 @@ public class DrawableIncrementalPoint : Drawable, IDrawable
 
     public void Draw(Image<Rgba32> image, NaplpsState state, Size size)
     {
-        if (!_command.IsValid || _command.Deposits.Count == 0)
+        if (!_command.IsValid || (_command.Deposits.Count == 0 && _command.ScrollBreaks.Count == 0))
         {
             return;
         }
@@ -38,18 +38,108 @@ public class DrawableIncrementalPoint : Drawable, IDrawable
         float pelWidth = MathF.Max(1f, MathF.Ceiling(MathF.Abs(dx) * size.Width));
         float pelHeight = MathF.Max(1f, MathF.Ceiling(MathF.Abs(dy) / (float)NaplpsUtils.DisplayRatio * size.Height));
 
-        image.Mutate(ctx =>
-        {
-            foreach (var deposit in _command.Deposits)
-            {
-                // The pel extends dx/dy from the drawing point with their signs; the rect's
-                // top-left in screen coordinates is the min-X / max-Y normalized corner.
-                float cornerX = dx > 0 ? deposit.X : deposit.X + dx;
-                float cornerY = dy > 0 ? deposit.Y + dy : deposit.Y;
+        // Deposits are drawn in segments split at the recorded scroll events: a row step
+        // that would exceed the field holds Y and instead shifts the display image lying
+        // within the field by -dy (5.3.3.6.3 step 3), carrying content already drawn -
+        // both by earlier commands and by this command's own earlier rows.
+        var deposits = _command.Deposits;
+        var breaks = _command.ScrollBreaks;
+        int drawn = 0;
+        int breakIndex = 0;
 
-                var point = ConvertNormalizedToPoint(size, cornerX, cornerY);
-                var color = GetColorForDeposit(state, deposit.ColorValue, _command.BitsPerPixel);
-                ctx.Fill(FillOptions(), color, new RectangleF(point.X, point.Y, pelWidth, pelHeight));
+        while (true)
+        {
+            int until = breakIndex < breaks.Count ? Math.Min(breaks[breakIndex], deposits.Count) : deposits.Count;
+
+            if (until > drawn)
+            {
+                int from = drawn;
+
+                image.Mutate(ctx =>
+                {
+                    for (int i = from; i < until; i++)
+                    {
+                        var deposit = deposits[i];
+
+                        // The pel extends dx/dy from the drawing point with their signs; the rect's
+                        // top-left in screen coordinates is the min-X / max-Y normalized corner.
+                        float cornerX = dx > 0 ? deposit.X : deposit.X + dx;
+                        float cornerY = dy > 0 ? deposit.Y + dy : deposit.Y;
+
+                        var point = ConvertNormalizedToPoint(size, cornerX, cornerY);
+                        var color = GetColorForDeposit(state, deposit.ColorValue, _command.BitsPerPixel);
+                        ctx.Fill(FillOptions(), color, new RectangleF(point.X, point.Y, pelWidth, pelHeight));
+                    }
+                });
+
+                drawn = until;
+            }
+
+            if (breakIndex >= breaks.Count)
+            {
+                break;
+            }
+
+            ScrollFieldRegion(image, state, size, (int)pelHeight, dy);
+            breakIndex++;
+        }
+    }
+
+    /// <summary>
+    /// Shifts the display image lying within the active field one pel height opposite the
+    /// row direction (-dy), the way a real terminal makes room for the held row. In the
+    /// framebuffer (Y down), a positive dy walks rows up the screen, so the content moves
+    /// toward larger Y. The strip the shift vacates - the held row's home - clears to
+    /// nominal black in color modes 0/1 and the background color in mode 2, matching the
+    /// text scroll rule (6.2.7.13).
+    /// </summary>
+    private void ScrollFieldRegion(Image<Rgba32> image, NaplpsState state, Size size, int shiftPixels, float dy)
+    {
+        var topLeft = ConvertNormalizedToPoint(size, _command.FieldMin.X, _command.FieldMax.Y);
+        var bottomRight = ConvertNormalizedToPoint(size, _command.FieldMax.X, _command.FieldMin.Y);
+
+        int x0 = Math.Clamp(topLeft.X, 0, image.Width);
+        int x1 = Math.Clamp(bottomRight.X, 0, image.Width);
+        int y0 = Math.Clamp(topLeft.Y, 0, image.Height);
+        int y1 = Math.Clamp(bottomRight.Y, 0, image.Height);
+
+        if (x1 <= x0 || y1 <= y0)
+        {
+            return;
+        }
+
+        var palette = (Drawable.UseLivePalette && Drawable.LivePalette != null) ? Drawable.LivePalette : state.ColorMap;
+        var clearColor = state.ColorMode == 2 && palette.TryGetValue(state.ColorMapBackground, out var background)
+            ? new Rgba32(background.Red, background.Green, background.Blue, 255)
+            : new Rgba32(0, 0, 0, 255);
+
+        int width = x1 - x0;
+
+        image.ProcessPixelRows(accessor =>
+        {
+            if (dy > 0)
+            {
+                for (int y = y1 - 1; y >= y0 + shiftPixels; y--)
+                {
+                    accessor.GetRowSpan(y - shiftPixels).Slice(x0, width).CopyTo(accessor.GetRowSpan(y).Slice(x0, width));
+                }
+
+                for (int y = y0; y < Math.Min(y0 + shiftPixels, y1); y++)
+                {
+                    accessor.GetRowSpan(y).Slice(x0, width).Fill(clearColor);
+                }
+            }
+            else
+            {
+                for (int y = y0; y < y1 - shiftPixels; y++)
+                {
+                    accessor.GetRowSpan(y + shiftPixels).Slice(x0, width).CopyTo(accessor.GetRowSpan(y).Slice(x0, width));
+                }
+
+                for (int y = Math.Max(y0, y1 - shiftPixels); y < y1; y++)
+                {
+                    accessor.GetRowSpan(y).Slice(x0, width).Fill(clearColor);
+                }
             }
         });
     }
