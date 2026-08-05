@@ -30,34 +30,41 @@ public static class MenuTreeBuilder
             fileChildren.Add(new MenuNode { Header = "Open Example...", Command = vm.OpenExampleCommand, FontAwesomeIcon = "fa-solid fa-images", ToolTip = "Load a .nap from the repository's example corpus" });
         }
 
+        fileChildren.AddRange(new[]
+        {
+            new MenuNode { Header = "Save", Command = vm.SaveCommand, Gesture = gestures.Save, FontAwesomeIcon = "fa-solid fa-floppy-disk", IsEnabledFn = fileLoaded },
+            new MenuNode { Header = "Save As...", Command = vm.SaveAsCommand, Gesture = gestures.SaveAs, FontAwesomeIcon = "fa-solid fa-floppy-disk", IsEnabledFn = fileLoaded },
+            new MenuNode { Header = "Close", Command = vm.CloseCommand, FontAwesomeIcon = "fa-solid fa-circle-xmark", IsEnabledFn = fileLoaded },
+            MenuNode.Separator,
+            new MenuNode
+            {
+                Header = "Import",
+                FontAwesomeIcon = "fa-solid fa-file-import",
+                Children = new[]
+                {
+                    new MenuNode { Header = "SVG...", Command = vm.ImportSvgCommand, FontAwesomeIcon = "fa-solid fa-bezier-curve", ToolTip = "Convert an SVG file's paths to Telidraw line commands" },
+                    new MenuNode { Header = "Bitmap...", Command = vm.ImportBitmapCommand, FontAwesomeIcon = "fa-solid fa-image", ToolTip = "Quantize a raster image to the 16-color palette and emit as filled cells" }
+                }
+            },
+            new MenuNode { Header = "Export...", Command = vm.ExportCommand, FontAwesomeIcon = "fa-solid fa-file-export", IsEnabledFn = fileLoaded },
+            MenuNode.Separator,
+            new MenuNode { Header = "Reference Image...", Command = vm.LoadReferenceImageFileCommand, FontAwesomeIcon = "fa-solid fa-image", IsEnabledFn = fileLoaded, ToolTip = "Overlay a photo/sketch behind the canvas as a drawing reference. Saved only in .td source." },
+            new MenuNode { Header = "Clear Reference Image", Command = vm.ClearReferenceImageCommand, FontAwesomeIcon = "fa-solid fa-ban", IsEnabledFn = v => v.IsReferenceImageLoaded },
+        });
+
+        // No process to quit in a browser tab; the command would be a no-op there.
+        if (!OperatingSystem.IsBrowser())
+        {
+            fileChildren.Add(MenuNode.Separator);
+            fileChildren.Add(new MenuNode { Header = "Quit", Command = vm.QuitCommand, FontAwesomeIcon = "fa-solid fa-door-open" });
+        }
+
         return new[]
         {
             new MenuNode
             {
                 Header = "File",
-                Children = fileChildren.Concat(new[]
-                {
-                    new MenuNode { Header = "Save", Command = vm.SaveCommand, Gesture = gestures.Save, FontAwesomeIcon = "fa-solid fa-floppy-disk", IsEnabledFn = fileLoaded },
-                    new MenuNode { Header = "Save As...", Command = vm.SaveAsCommand, Gesture = gestures.SaveAs, FontAwesomeIcon = "fa-solid fa-floppy-disk", IsEnabledFn = fileLoaded },
-                    new MenuNode { Header = "Close", Command = vm.CloseCommand, FontAwesomeIcon = "fa-solid fa-circle-xmark", IsEnabledFn = fileLoaded },
-                    MenuNode.Separator,
-                    new MenuNode
-                    {
-                        Header = "Import",
-                        FontAwesomeIcon = "fa-solid fa-file-import",
-                        Children = new[]
-                        {
-                            new MenuNode { Header = "SVG...", Command = vm.ImportSvgCommand, FontAwesomeIcon = "fa-solid fa-bezier-curve", ToolTip = "Convert an SVG file's paths to Telidraw line commands" },
-                            new MenuNode { Header = "Bitmap...", Command = vm.ImportBitmapCommand, FontAwesomeIcon = "fa-solid fa-image", ToolTip = "Quantize a raster image to the 16-color palette and emit as filled cells" }
-                        }
-                    },
-                    new MenuNode { Header = "Export...", Command = vm.ExportCommand, FontAwesomeIcon = "fa-solid fa-file-export", IsEnabledFn = fileLoaded },
-                    MenuNode.Separator,
-                    new MenuNode { Header = "Reference Image...", Command = vm.LoadReferenceImageFileCommand, FontAwesomeIcon = "fa-solid fa-image", IsEnabledFn = fileLoaded, ToolTip = "Overlay a photo/sketch behind the canvas as a drawing reference. Saved only in .td source." },
-                    new MenuNode { Header = "Clear Reference Image", Command = vm.ClearReferenceImageCommand, FontAwesomeIcon = "fa-solid fa-ban", IsEnabledFn = v => v.IsReferenceImageLoaded },
-                    MenuNode.Separator,
-                    new MenuNode { Header = "Quit", Command = vm.QuitCommand, FontAwesomeIcon = "fa-solid fa-door-open" }
-                }).ToArray()
+                Children = fileChildren
             },
             new MenuNode
             {
