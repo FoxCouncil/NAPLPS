@@ -46,6 +46,23 @@ public sealed class NaplpsDecoder
 
     private const int MaxDrcsRecursionDepth = 4;
 
+    /// <summary>Count of consecutive splice expansions whose invocation byte was itself
+    /// injected - i.e. produced by a previous expansion. A self- or mutually-recursive
+    /// macro refills the injection queue forever without ever returning to the real
+    /// stream, so this only grows; an invocation byte read from the real stream resets
+    /// it. Spec is silent on a limit; the cap is far above any real-world nesting and
+    /// exists to bound hostile or corrupt input (see ANSI X3.110 5.5).</summary>
+    private int _macroExpansionChain;
+
+    private const int MaxChainedMacroExpansions = 256;
+
+    /// <summary>Recursion depth of non-spliced macro expansion (DEFP define-and-display
+    /// replay and isolated sub-parses), which descends through <see cref="RunCompleteParse"/>.
+    /// Unbounded, a self-invoking DEFP macro dies by uncatchable StackOverflowException.</summary>
+    private int _macroRecursionDepth;
+
+    private const int MaxMacroRecursionDepth = 16;
+
     /// <summary>The wire path's byte substrate: created on the first Feed/Flush, replaced
     /// when a completed (flushed) stream is fed again.</summary>
     private ByteSource? _source;
@@ -345,7 +362,20 @@ public sealed class NaplpsDecoder
                         // command preceding it (see ReadOperandsAsync).
                         if (State.Macros.TryGetValue((char)opcode, out var macroBody) && macroBody.Length > 0)
                         {
-                            source.InjectFront(macroBody);
+                            if (!opcodeInjected)
+                            {
+                                _macroExpansionChain = 0;
+                            }
+
+                            if (_macroExpansionChain < MaxChainedMacroExpansions)
+                            {
+                                _macroExpansionChain++;
+                                source.InjectFront(macroBody);
+                            }
+                            else
+                            {
+                                RecordError(NaplpsErrorSeverity.Warning, NaplpsErrorType.InvalidCommand, "Recursive macro expansion exceeded the chain limit; expansion suppressed", opcode, source.RealPosition);
+                            }
                         }
                     }
                     else
@@ -555,10 +585,28 @@ public sealed class NaplpsDecoder
                     // DEFP MACRO defines and displays in one step (X3.110 define-and-display
                     // form): the executed body is presentation output, not coded input, so
                     // those sequences are synthetic - the definition serializes exactly once.
-                    foreach (var seq in RunCompleteParse(ByteSource.FromBuffer(macroData)))
+                    // The replay shares the recursion depth cap with ExecuteMacro: a body that
+                    // reaches back into itself would otherwise descend without bound.
+                    if (_macroRecursionDepth >= MaxMacroRecursionDepth)
                     {
-                        seq.IsSynthetic = true;
-                        commands.Add(seq);
+                        RecordError(NaplpsErrorSeverity.Warning, NaplpsErrorType.InvalidCommand, "Recursive macro expansion exceeded the depth limit; DEFP replay suppressed", (byte)macroName);
+                    }
+                    else
+                    {
+                        _macroRecursionDepth++;
+
+                        try
+                        {
+                            foreach (var seq in RunCompleteParse(ByteSource.FromBuffer(macroData)))
+                            {
+                                seq.IsSynthetic = true;
+                                commands.Add(seq);
+                            }
+                        }
+                        finally
+                        {
+                            _macroRecursionDepth--;
+                        }
                     }
                 }
 
@@ -723,6 +771,20 @@ public sealed class NaplpsDecoder
 
                     if (State.IsMacroByte(next) && State.Macros.TryGetValue((char)next, out var macroBody) && macroBody.Length > 0)
                     {
+                        if (!source.HasInjected)
+                        {
+                            _macroExpansionChain = 0;
+                        }
+
+                        if (_macroExpansionChain >= MaxChainedMacroExpansions)
+                        {
+                            // Chain limit hit mid-operand scan: leave the invocation byte for
+                            // the main loop, which preserves it as a raw command and records
+                            // the suppression there.
+                            break;
+                        }
+
+                        _macroExpansionChain++;
                         source.ReadByte();
                         State.PendingSingleShift = null; // the single-shift, if any, is consumed here
                         source.InjectFront(macroBody);
@@ -1198,14 +1260,32 @@ public sealed class NaplpsDecoder
 
             if (State.Macros.TryGetValue(macroName, out var macroData))
             {
-                // ANSI X3.110 section 6.1.6.3: pass isMacroExpansion = true so a CAN inside the
-                // macro body terminates it immediately. The outer parse resumes
-                // at the next byte after the macro invocation. Expansion sequences are
-                // synthetic: they render, but only the invocation byte is coded input.
-                foreach (var seq in RunCompleteParse(ByteSource.FromBuffer(macroData), isMacroExpansion: true))
+                // A self- or mutually-invoking macro recurses through the sub-parse without
+                // bound and dies by uncatchable StackOverflowException; cap the depth and
+                // suppress the expansion instead (the invocation byte still round-trips).
+                if (_macroRecursionDepth >= MaxMacroRecursionDepth)
                 {
-                    seq.IsSynthetic = true;
-                    commands.Add(seq);
+                    RecordError(NaplpsErrorSeverity.Warning, NaplpsErrorType.InvalidCommand, "Recursive macro expansion exceeded the depth limit; expansion suppressed", (byte)macroName);
+                    return;
+                }
+
+                _macroRecursionDepth++;
+
+                try
+                {
+                    // ANSI X3.110 section 6.1.6.3: pass isMacroExpansion = true so a CAN inside the
+                    // macro body terminates it immediately. The outer parse resumes
+                    // at the next byte after the macro invocation. Expansion sequences are
+                    // synthetic: they render, but only the invocation byte is coded input.
+                    foreach (var seq in RunCompleteParse(ByteSource.FromBuffer(macroData), isMacroExpansion: true))
+                    {
+                        seq.IsSynthetic = true;
+                        commands.Add(seq);
+                    }
+                }
+                finally
+                {
+                    _macroRecursionDepth--;
                 }
 
                 State.IsCancelRequested = false;
