@@ -80,7 +80,7 @@ public static class Html
         sb.AppendLine("<body>");
         sb.AppendLine("<header class='site'>");
         sb.AppendLine($"<a class='brand' href='{up}index.html'>NAPLPS <span>Visual Corpus</span></a>");
-        sb.AppendLine($"<nav><a href='{up}index.html'>Gallery</a><a href='{up}changes/index.html'>Changes</a><a href='https://github.com/FoxCouncil/NAPLPS'>Source</a></nav>");
+        sb.AppendLine($"<nav><a href='{up}index.html'>Gallery</a><a href='{up}changes/index.html'>Changes</a><a href='{up}editor/'>Editor</a><a href='https://github.com/FoxCouncil/NAPLPS'>Source</a></nav>");
         sb.AppendLine("</header>");
         sb.AppendLine("<main>");
 

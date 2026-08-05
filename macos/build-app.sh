@@ -62,7 +62,7 @@ VERSION="${VERSION:-0.0.0}"
 PUB="$(mktemp -d)"
 
 echo "== publish app ($RID) =="
-"$DOTNET" publish "$ROOT/Telidraw/Telidraw.csproj" -c Release -r "$RID" --self-contained true \
+"$DOTNET" publish "$ROOT/Telidraw/Telidraw.csproj" -c Release -f net10.0 -r "$RID" --self-contained true \
   -p:PublishSingleFile=false -p:PublishTrimmed=false -o "$PUB" 2>&1 | tail -1
 
 echo "== build Quick Look extensions =="

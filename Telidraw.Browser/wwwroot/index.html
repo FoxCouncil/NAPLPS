@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Telidraw</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="./favicon.ico">
+    <link rel="stylesheet" href="./app.css" />
+</head>
+
+<body style="margin: 0; overflow: hidden">
+<div id="out">
+    <!-- Class name matters: Avalonia.Browser hides ".avalonia-splash" once the app starts. -->
+    <div class="avalonia-splash">
+        <h2>Telidraw is loading&hellip;</h2>
+        <p>The whole editor runs in your browser. The first visit downloads the .NET runtime, so give it a moment.</p>
+    </div>
+</div>
+<script type='module' src="./main.js"></script>
+</body>
+
+</html>

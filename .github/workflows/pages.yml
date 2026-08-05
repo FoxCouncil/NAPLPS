@@ -16,6 +16,10 @@ on:
       - 'NAPLPSTests/Visual/Baselines/**'
       - 'NAPLPSSite/**'
       - 'Examples/**'
+      # The editor ships on the site as WebAssembly, so app and library changes redeploy it.
+      - 'Telidraw/**'
+      - 'Telidraw.Browser/**'
+      - 'NAPLPS/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
     inputs:
@@ -64,6 +68,23 @@ jobs:
           --out "$GITHUB_WORKSPACE/_site"
           --base-url "${{ steps.pages.outputs.base_url }}"
           --history "${{ inputs.history || '5' }}"
+
+      # The whole editor, compiled to WebAssembly, served at /editor/ next to the gallery.
+      - name: Install wasm-tools workload
+        run: dotnet workload install wasm-tools
+
+      - name: Publish editor (WASM)
+        run: dotnet publish Telidraw.Browser/Telidraw.Browser.csproj -c Release -o "$RUNNER_TEMP/editor-publish"
+
+      - name: Add editor to site
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/_site/editor"
+          cp -r "$RUNNER_TEMP/editor-publish/wwwroot/." "$GITHUB_WORKSPACE/_site/editor/"
+          # Pages serves its own compression; the SDK's precompressed twins just triple the artifact.
+          find "$GITHUB_WORKSPACE/_site/editor" -name '*.br' -delete
+          find "$GITHUB_WORKSPACE/_site/editor" -name '*.gz' -delete
+          # Without this, Pages' Jekyll pass drops the _framework directory the loader needs.
+          touch "$GITHUB_WORKSPACE/_site/.nojekyll"
 
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
