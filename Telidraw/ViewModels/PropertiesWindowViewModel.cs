@@ -42,10 +42,7 @@ public partial class PropertiesWindowViewModel : ViewModelBase
     {
         var text = string.Join(Environment.NewLine, DiagnosticItems.Select(d => $"[{d.Severity}] {d.Type}: {d.Message} {d.Details}"));
 
-        if (App.MainWindow?.Clipboard != null)
-        {
-            App.MainWindow.Clipboard.SetTextAsync(text);
-        }
+        Telidraw.Services.Shell.Clipboard?.SetTextAsync(text);
     }
 
     [RelayCommand]
@@ -58,10 +55,7 @@ public partial class PropertiesWindowViewModel : ViewModelBase
 
         var text = $"[{item.Severity}] {item.Type}: {item.Message} {item.Details}";
 
-        if (App.MainWindow?.Clipboard != null)
-        {
-            App.MainWindow.Clipboard.SetTextAsync(text);
-        }
+        Telidraw.Services.Shell.Clipboard?.SetTextAsync(text);
     }
 
     public static PropertiesWindowViewModel FromFile(NaplpsFormat naplps, string filePath, ObservableCollection<DiagnosticItem> diagnostics, int startTab = 0)

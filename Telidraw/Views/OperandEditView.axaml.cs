@@ -1,10 +1,12 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
+using Telidraw.Services;
+
 namespace Telidraw.Views;
 
-public partial class OperandEditWindow : Window
+public partial class OperandEditView : UserControl
 {
-    public OperandEditWindow()
+    public OperandEditView()
     {
         InitializeComponent();
         DataContext = new OperandEditViewModel();
@@ -14,18 +16,19 @@ public partial class OperandEditWindow : Window
     /// Open the edit dialog for the given (opcode, operands). Returns the updated operands
     /// when the user commits; null if they cancelled or the parse failed.
     /// </summary>
-    public static async Task<NaplpsOperands?> PromptAsync(Window owner, byte opcode, NaplpsOperands current)
+    public static async Task<NaplpsOperands?> PromptAsync(byte opcode, NaplpsOperands current)
     {
-        var dialog = new OperandEditWindow();
+        var view = new OperandEditView();
 
-        if (dialog.DataContext is OperandEditViewModel vm)
+        if (view.DataContext is OperandEditViewModel vm)
         {
             vm.Initialize(opcode, current);
+            vm.RequestClose += () => Shell.CloseHost(view);
         }
 
-        await dialog.ShowDialog(owner);
+        await Shell.ShowDialogAsync(view, new ChildShellOptions("Edit Operands") { Width = 500, Height = 360 });
 
-        if (dialog.DataContext is OperandEditViewModel vm2 && vm2.IsCommitted)
+        if (view.DataContext is OperandEditViewModel vm2 && vm2.IsCommitted)
         {
             return vm2.ResultOperands;
         }

@@ -1,16 +1,13 @@
-<Window xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 		xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
 		xmlns:i="using:Telidraw.Icons"
 		xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
 		xmlns:vm="using:Telidraw.ViewModels"
 		mc:Ignorable="d" d:DesignWidth="360" d:DesignHeight="420"
-		x:Class="Telidraw.Views.LayersWindow"
+		x:Class="Telidraw.Views.LayersView"
 		x:DataType="vm:LayersWindowViewModel"
-		Title="Layers"
-		Icon="/Assets/naplps.ico"
-		Width="360" Height="420"
-		WindowStartupLocation="CenterOwner">
+	>
 	<DockPanel Margin="8">
 		<StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="4" Margin="0,0,0,8">
 			<Button Command="{Binding AddLayerCommand}" ToolTip.Tip="New layer">
@@ -47,4 +44,4 @@
 			</ListBox>
 		</Border>
 	</DockPanel>
-</Window>
+</UserControl>

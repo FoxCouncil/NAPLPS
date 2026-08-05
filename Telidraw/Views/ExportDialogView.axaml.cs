@@ -1,29 +1,31 @@
 // Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
+using Telidraw.Services;
+
 namespace Telidraw.Views;
 
-public partial class ExportDialog : Window
+public partial class ExportDialogView : UserControl
 {
-    public ExportDialog()
+    public ExportDialogView()
     {
         InitializeComponent();
         DataContext = new ExportDialogViewModel();
 
         if (DataContext is ExportDialogViewModel vm)
         {
-            vm.RequestClose += Close;
+            vm.RequestClose += () => Shell.CloseHost(this);
         }
     }
 
     /// <summary>
-    /// Show the export dialog modally over <paramref name="owner"/>, seeding the source
-    /// canvas dimensions so the Output preview is accurate. Returns the VM if the user
-    /// accepted (so MainWindow can read Format/Scale/Quality), or null if cancelled.
+    /// Show the export dialog modally, seeding the source canvas dimensions so the Output
+    /// preview is accurate. Returns the VM if the user accepted (so the caller can read
+    /// Format/Scale/Quality), or null if cancelled.
     /// </summary>
-    public static async Task<ExportDialogViewModel?> PromptAsync(Window owner, int sourceWidth, int sourceHeight, int estimatedApngFrames = 0)
+    public static async Task<ExportDialogViewModel?> PromptAsync(int sourceWidth, int sourceHeight, int estimatedApngFrames = 0)
     {
-        var dialog = new ExportDialog();
-        if (dialog.DataContext is ExportDialogViewModel vm)
+        var view = new ExportDialogView();
+        if (view.DataContext is ExportDialogViewModel vm)
         {
             vm.SourceWidth = sourceWidth;
             vm.SourceHeight = sourceHeight;
@@ -36,9 +38,9 @@ public partial class ExportDialog : Window
             }
         }
 
-        await dialog.ShowDialog(owner);
+        await Shell.ShowDialogAsync(view, new ChildShellOptions("Export Image") { Width = 440, SizeToContentHeight = true, CanResize = false });
 
-        if (dialog.DataContext is ExportDialogViewModel vm2 && vm2.IsCommitted)
+        if (view.DataContext is ExportDialogViewModel vm2 && vm2.IsCommitted)
         {
             return vm2;
         }

@@ -4,14 +4,14 @@ using Telidraw.Editor;
 
 namespace Telidraw.Views;
 
-public partial class LayersWindow : Window
+public partial class LayersView : UserControl
 {
-    public LayersWindow()
+    public LayersView()
     {
         InitializeComponent();
     }
 
-    public LayersWindow(LayerManager manager) : this()
+    public LayersView(LayerManager manager) : this()
     {
         DataContext = new LayersWindowViewModel(manager);
     }

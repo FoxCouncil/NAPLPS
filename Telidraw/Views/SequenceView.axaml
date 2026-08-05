@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 		xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
 		xmlns:i="using:Telidraw.Icons"
@@ -9,15 +9,13 @@
 		xmlns:vm="using:Telidraw.ViewModels"
 		xmlns:pgc="clr-namespace:Avalonia.PropertyGrid.Controls;assembly=Avalonia.PropertyGrid"
 		mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
-		x:Class="Telidraw.Views.SequenceWindow"
+		x:Class="Telidraw.Views.SequenceView"
 		x:DataType="vm:SequenceWindowViewModel"
-		Title="Sequence View"
-		Icon="/Assets/naplps.ico"
-		Width="1500" Height="1000">
-	<Window.Resources>
+	>
+	<UserControl.Resources>
 		<c:EqualityConverter x:Key="EqualityConverter" />
 		<c:InequalityConverter x:Key="InequalityConverter" />
-	</Window.Resources>
+	</UserControl.Resources>
 
 	<Grid RowDefinitions="Auto,*" ColumnDefinitions="*,Auto">
 		<Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" BorderBrush="{DynamicResource SystemControlForegroundBaseHighBrush}" BorderThickness="0,0,0,1">
@@ -38,9 +36,9 @@
 				
 				<Border Margin="10,0" Width="{DynamicResource MenuFlyoutSeparatorThemeHeight}" Background="{DynamicResource SystemControlForegroundBaseHighBrush}"/>
 
-				<Button i:Attached.Icon="fa-solid fa-plus" VerticalAlignment="Center" Command="{Binding AddCommand}" CommandParameter="{Binding $parent[Window]}" ToolTip.Tip="Add command"/>
-				<Button i:Attached.Icon="fa-solid fa-pencil" VerticalAlignment="Center" Command="{Binding EditOperandsCommand}" CommandParameter="{Binding $parent[Window]}" ToolTip.Tip="Edit operand bytes of the selected command"/>
-				<Button i:Attached.Icon="fa-solid fa-trash" VerticalAlignment="Center" Command="{Binding DeleteCommand}" CommandParameter="{Binding $parent[Window]}" ToolTip.Tip="Delete selected"/>
+				<Button i:Attached.Icon="fa-solid fa-plus" VerticalAlignment="Center" Command="{Binding AddCommand}" ToolTip.Tip="Add command"/>
+				<Button i:Attached.Icon="fa-solid fa-pencil" VerticalAlignment="Center" Command="{Binding EditOperandsCommand}" ToolTip.Tip="Edit operand bytes of the selected command"/>
+				<Button i:Attached.Icon="fa-solid fa-trash" VerticalAlignment="Center" Command="{Binding DeleteCommand}" ToolTip.Tip="Delete selected"/>
 
 				<Border Margin="10,0" Width="{DynamicResource MenuFlyoutSeparatorThemeHeight}" Background="{DynamicResource SystemControlForegroundBaseHighBrush}"/>
 
@@ -188,4 +186,4 @@
 			</Grid>
 		</Border>
 	</Grid>
-</Window>
+</UserControl>

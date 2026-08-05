@@ -1,15 +1,12 @@
-<Window xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 		xmlns:vm="using:Telidraw.ViewModels"
 		xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
 		xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
 		mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="360"
-		Width="500" Height="360"
-		x:Class="Telidraw.Views.OperandEditWindow"
-		x:DataType="vm:OperandEditViewModel"
-		Icon="/Assets/naplps.ico"
-		Title="Edit Operands"
-		WindowStartupLocation="CenterOwner">
+	
+		x:Class="Telidraw.Views.OperandEditView"
+		x:DataType="vm:OperandEditViewModel">
 	<DockPanel Margin="12">
 		<StackPanel DockPanel.Dock="Top" Orientation="Vertical" Spacing="6" Margin="0,0,0,10">
 			<TextBlock Text="{Binding CommandName}" FontWeight="Bold" FontSize="16"/>
@@ -22,10 +19,9 @@
 
 		<StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,10,0,0">
 			<TextBlock Text="{Binding ParseError}" Foreground="#F55" VerticalAlignment="Center" FontSize="11"/>
-			<Button Content="Cancel" Command="{Binding CancelCommand}" CommandParameter="{Binding $parent[Window]}"/>
+			<Button Content="Cancel" Command="{Binding CancelCommand}"/>
 			<Button Content="Commit"
 					Command="{Binding CommitCommand}"
-					CommandParameter="{Binding $parent[Window]}"
 					Classes="accent"/>
 		</StackPanel>
 
@@ -39,4 +35,4 @@
 					 TextWrapping="Wrap"/>
 		</DockPanel>
 	</DockPanel>
-</Window>
+</UserControl>

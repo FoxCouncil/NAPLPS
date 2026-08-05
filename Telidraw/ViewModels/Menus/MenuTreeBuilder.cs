@@ -8,13 +8,10 @@ namespace Telidraw.ViewModels.Menus;
 /// Builds the complete menu tree that drives both the in-window <c>Menu</c> and
 /// the macOS <c>NativeMenu</c>. Single source of truth — keep this in sync as
 /// the menu evolves.
-///
-/// <paramref name="windowForCommandParameter"/> stands in for the old XAML
-/// <c>{Binding $parent[Window]}</c> pattern used by dialog-host commands.
 /// </summary>
 public static class MenuTreeBuilder
 {
-    public static IReadOnlyList<MenuNode> Build(MainWindowViewModel vm, PlatformGestureSet gestures, object? windowForCommandParameter = null)
+    public static IReadOnlyList<MenuNode> Build(MainWindowViewModel vm, PlatformGestureSet gestures)
     {
         Func<MainWindowViewModel, bool> fileLoaded = v => v.IsFileLoaded;
         Func<MainWindowViewModel, bool> macroRecording = v => v.IsMacroRecording;
@@ -77,8 +74,8 @@ public static class MenuTreeBuilder
                             new MenuNode { Header = "Load Prodigy Palette", Command = vm.LoadProdigyPaletteCommand, FontAwesomeIcon = "fa-solid fa-swatchbook", IsEnabledFn = fileLoaded, ToolTip = "Replace palette with Prodigy's canonical CLUT" }
                         }
                     },
-                    new MenuNode { Header = "DRCS Character...", Command = vm.OpenDrcsDesignerCommand, CommandParameter = windowForCommandParameter, FontAwesomeIcon = "fa-solid fa-keyboard", IsEnabledFn = fileLoaded, ToolTip = "Design a custom 8\u00d710 bitmap character and commit it as a DEF DRCS command" },
-                    new MenuNode { Header = "Texture Mask...", Command = vm.OpenTextureDesignerCommand, CommandParameter = windowForCommandParameter, FontAwesomeIcon = "fa-solid fa-grip", IsEnabledFn = fileLoaded, ToolTip = "Design a fill pattern + mask and commit as a DEF TEXTURE command" },
+                    new MenuNode { Header = "DRCS Character...", Command = vm.OpenDrcsDesignerCommand, FontAwesomeIcon = "fa-solid fa-keyboard", IsEnabledFn = fileLoaded, ToolTip = "Design a custom 8\u00d710 bitmap character and commit it as a DEF DRCS command" },
+                    new MenuNode { Header = "Texture Mask...", Command = vm.OpenTextureDesignerCommand, FontAwesomeIcon = "fa-solid fa-grip", IsEnabledFn = fileLoaded, ToolTip = "Design a fill pattern + mask and commit as a DEF TEXTURE command" },
                     MenuNode.Separator,
                     new MenuNode
                     {

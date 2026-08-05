@@ -1,14 +1,10 @@
-<Window xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 		xmlns:vm="using:Telidraw.ViewModels"
 		xmlns:i="using:Telidraw.Icons"
-		x:Class="Telidraw.Views.PropertiesWindow"
+		x:Class="Telidraw.Views.PropertiesView"
 		x:DataType="vm:PropertiesWindowViewModel"
-		Title="File Properties"
-		Width="580" Height="560"
-		MinWidth="450" MinHeight="400"
-		WindowStartupLocation="CenterOwner"
-		Icon="/Assets/naplps.ico">
+	>
 
 	<Design.DataContext>
 		<vm:PropertiesWindowViewModel/>
@@ -129,4 +125,4 @@
 			</TabItem>
 		</TabControl>
 	</DockPanel>
-</Window>
+</UserControl>

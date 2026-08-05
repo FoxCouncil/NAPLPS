@@ -51,17 +51,20 @@ public partial class TextureDesignerViewModel : ViewModelBase
         foreach (var c in MaskCells) { c.IsOn = false; }
     }
 
+    /// <summary>Raised when the dialog should close; the hosting view routes it to its shell.</summary>
+    public event Action? RequestClose;
+
     [RelayCommand]
-    private void Commit(Window host)
+    private void Commit()
     {
         IsCommitted = true;
-        host.Close();
+        RequestClose?.Invoke();
     }
 
     [RelayCommand]
-    private static void Cancel(Window host)
+    private void Cancel()
     {
-        host.Close();
+        RequestClose?.Invoke();
     }
 
     /// <summary>

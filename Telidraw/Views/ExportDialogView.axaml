@@ -1,17 +1,12 @@
-﻿<Window xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 		xmlns:vm="using:Telidraw.ViewModels"
 		xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
 		xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
 		mc:Ignorable="d" d:DesignWidth="440" d:DesignHeight="320"
-		Width="440"
-		SizeToContent="Height"
-		x:Class="Telidraw.Views.ExportDialog"
-		x:DataType="vm:ExportDialogViewModel"
-		Icon="/Assets/naplps.ico"
-		Title="Export Image"
-		WindowStartupLocation="CenterOwner"
-		CanResize="False">
+	
+		x:Class="Telidraw.Views.ExportDialogView"
+		x:DataType="vm:ExportDialogViewModel">
 	<DockPanel Margin="14">
 		<StackPanel DockPanel.Dock="Top" Orientation="Vertical" Spacing="10">
 
@@ -100,4 +95,4 @@
 
 		<Border/>
 	</DockPanel>
-</Window>
+</UserControl>

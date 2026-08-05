@@ -2,16 +2,16 @@
 
 namespace Telidraw.Views;
 
-public partial class SequenceWindow : Window
+public partial class SequenceView : UserControl
 {
-    public SequenceWindow()
+    public SequenceView()
     {
         InitializeComponent();
 
         DataContext = new SequenceWindowViewModel();
     }
 
-    public SequenceWindow(DrawContext drawContext, UndoManager? undoManager = null) : this()
+    public SequenceView(DrawContext drawContext, UndoManager? undoManager = null) : this()
     {
         var vectorPlot = this.Find<AvaPlot>("VectorPlot");
 

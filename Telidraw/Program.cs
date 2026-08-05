@@ -14,9 +14,11 @@ sealed class Program
 {
     public static string Version { get; } = GetLibraryVersion();
 
+#if !BROWSER
     // Initialization code. Don't use any Avalonia, third-party APIs or any
     // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
-    // yet and stuff might break.
+    // yet and stuff might break. The browser head has its own Main (Telidraw.Browser); this
+    // one, the CLI handlers and the desktop AppBuilder are compiled out of the browser TFM.
     [STAThread]
     public static int Main(string[] args)
     {
@@ -771,6 +773,8 @@ sealed class Program
         }
     }
 
+#endif
+
     internal static bool ParseSize(string size, out int width, out int height)
     {
         width = 0; height = 0;
@@ -778,6 +782,7 @@ sealed class Program
         return parts.Length == 2 && int.TryParse(parts[0], out width) && int.TryParse(parts[1], out height);
     }
 
+#if !BROWSER
     private static int ExportPng(DrawContext drawContext, string? outputFile, bool useStdout, string? atFrames = null)
     {
         if (atFrames == null)
@@ -981,6 +986,7 @@ sealed class Program
             .WithInterFont()
             .LogToTrace();
     }
+#endif
 
     public static async Task ShowAboutBox()
     {
@@ -1004,12 +1010,10 @@ sealed class Program
             CanResize = true,
         };
 
-        var messageBox = MessageBoxManager.GetMessageBoxCustom(messageBoxParams);
-
-        await messageBox.ShowAsync();
+        await Telidraw.Services.Shell.ShowCustomMessageAsync(messageBoxParams);
     }
 
-    public static async Task<bool> ShowQuestionDialogBox(Window owner, string title, string question)
+    public static async Task<bool> ShowQuestionDialogBox(string title, string question)
     {
         var iconBitmap = new Bitmap(AssetLoader.Open(new Uri("avares://Telidraw/Assets/naplps.ico")));
 
@@ -1031,9 +1035,7 @@ sealed class Program
             CanResize = true,
         };
 
-        var messageBox = MessageBoxManager.GetMessageBoxCustom(messageBoxParams);
-
-        var result = await messageBox.ShowWindowDialogAsync(owner);
+        var result = await Telidraw.Services.Shell.ShowCustomMessageAsync(messageBoxParams);
 
         return result == "Yes";
     }

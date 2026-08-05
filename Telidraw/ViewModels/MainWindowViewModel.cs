@@ -2,10 +2,10 @@
 
 using Avalonia.Platform.Storage;
 
-using MsBox.Avalonia;
-
 using Telidraw.Editor;
 using Telidraw.Editor.Tools;
+using Telidraw.Services;
+using Telidraw.Views;
 
 namespace Telidraw.ViewModels;
 
@@ -108,8 +108,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     private readonly SemaphoreSlim renderLock = new(1, 1);
 
-    private Window? sequenceWindow;
-    private Window? layersWindow;
+    private IChildShell? sequenceWindow;
+    private IChildShell? layersWindow;
 
     /// <summary>Editor-side layer management. Layers are a .td-only concept; the NAPLPS
     /// binary format has no layer semantics, so saves to .nap flatten them.</summary>
@@ -635,7 +635,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
-        var storageProvider = App.MainWindow?.StorageProvider;
+        var storageProvider = Shell.StorageProvider;
 
         if (storageProvider == null)
         {
@@ -660,7 +660,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         if (result.Count > 0)
         {
-            await FileLoad(result[0].Path.LocalPath);
+            await FileLoad(await StorageIo.GetReadablePathAsync(result[0]));
         }
     }
 
@@ -686,14 +686,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task Save()
     {
-        if (loadedFile == null || App.MainWindow?.StorageProvider == null)
+        if (loadedFile == null || Shell.StorageProvider == null)
         {
             return;
         }
 
-        var saveFilePath = loadedFilePath;
-
-        if (saveFilePath == DEFAULT_NEW_FILE_NAME)
+        // A picker is needed for a never-saved document, and always under a single-view
+        // lifetime: the browser has no in-place file to overwrite, so every save streams
+        // through a picked storage item (a download or File System Access write).
+        if (loadedFilePath == DEFAULT_NEW_FILE_NAME || Shell.IsSingleView)
         {
             var fileTypes = new FilePickerFileType[]
             {
@@ -711,22 +712,28 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 SuggestedFileName = IOPath.GetFileName(loadedFilePath)
             };
 
-            var result = await App.MainWindow.StorageProvider.SaveFilePickerAsync(options);
+            var result = await Shell.StorageProvider.SaveFilePickerAsync(options);
 
-            if (result != null)
+            if (result == null)
             {
-                saveFilePath = result.Path.LocalPath;
+                return;
             }
-        }
 
-        loadedFile.Save(saveFilePath);
+            await StorageIo.WriteBytesAsync(result, loadedFile.ToBytes());
 
-        if (saveFilePath != DEFAULT_NEW_FILE_NAME)
-        {
-            loadedFilePath = saveFilePath;
-            FileName = IOPath.GetFileName(saveFilePath);
+            if (result.TryGetLocalPath() is { } localPath)
+            {
+                loadedFilePath = localPath;
+            }
+
+            FileName = result.Name;
             TitleBar = $"{FileName} - {DEFAULT_APP_NAME} [{Program.Version}]";
+            IsFileDirty = false;
+
+            return;
         }
+
+        loadedFile.Save(loadedFilePath);
 
         IsFileDirty = false;
     }
@@ -734,7 +741,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task SaveAs()
     {
-        if (loadedFile == null || App.MainWindow?.StorageProvider == null)
+        if (loadedFile == null || Shell.StorageProvider == null)
         {
             return;
         }
@@ -753,13 +760,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             SuggestedFileName = IOPath.GetFileName(loadedFilePath)
         };
 
-        var result = await App.MainWindow.StorageProvider.SaveFilePickerAsync(options);
+        var result = await Shell.StorageProvider.SaveFilePickerAsync(options);
 
         if (result != null)
         {
-            var savePath = result.Path.LocalPath;
-
-            if (savePath.EndsWith(".td", StringComparison.OrdinalIgnoreCase))
+            if (result.Name.EndsWith(".td", StringComparison.OrdinalIgnoreCase))
             {
                 // Save as Telidraw source — decompile the current format to text.
                 var tdSource = NAPLPS.Telidraw.Decompiler.Decompile(loadedFile);
@@ -771,15 +776,19 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 // structured comment at the top of the source. The compiler's lexer
                 // already skips // comments, so this doesn't affect parsing.
                 tdSource = ReferenceImageSerializer.Prepend(tdSource, ReferenceImage);
-                await System.IO.File.WriteAllTextAsync(savePath, tdSource);
+                await StorageIo.WriteTextAsync(result, tdSource);
             }
             else
             {
-                loadedFile.Save(savePath);
+                await StorageIo.WriteBytesAsync(result, loadedFile.ToBytes());
             }
 
-            loadedFilePath = savePath;
-            FileName = IOPath.GetFileName(savePath);
+            if (result.TryGetLocalPath() is { } localPath)
+            {
+                loadedFilePath = localPath;
+            }
+
+            FileName = result.Name;
             TitleBar = $"{FileName} - {DEFAULT_APP_NAME} [{Program.Version}]";
             IsFileDirty = false;
         }
@@ -791,13 +800,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     /// </summary>
     private async Task<bool> PromptSaveIfDirty()
     {
-        if (!IsFileDirty || App.MainWindow == null)
+        if (!IsFileDirty || Shell.TopLevel == null)
         {
             return true;
         }
 
         var result = await Program.ShowQuestionDialogBox(
-            App.MainWindow,
             "Unsaved Changes",
             "You have unsaved changes. Do you want to save before continuing?");
 
@@ -827,9 +835,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task LoadReferenceImageFile()
     {
-        if (App.MainWindow == null) { return; }
+        if (Shell.StorageProvider == null) { return; }
 
-        var picker = await App.MainWindow.StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+        var picker = await Shell.StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
         {
             Title = "Load Reference Image",
             AllowMultiple = false,
@@ -840,7 +848,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         });
         if (picker.Count == 0) { return; }
 
-        var path = picker[0].Path.LocalPath;
+        var path = await StorageIo.GetReadablePathAsync(picker[0]);
         SetReferenceImage(path, x: 0f, y: 0f, width: 1f, height: 0.75f, opacity: 0.5, visible: true);
     }
 
@@ -888,9 +896,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task ImportSvg()
     {
-        if (App.MainWindow == null) { return; }
+        if (Shell.StorageProvider == null) { return; }
 
-        var picker = await App.MainWindow.StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+        var picker = await Shell.StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
         {
             Title = "Import SVG",
             AllowMultiple = false,
@@ -898,7 +906,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         });
         if (picker.Count == 0) { return; }
 
-        var svgXml = await System.IO.File.ReadAllTextAsync(picker[0].Path.LocalPath);
+        var svgXml = await System.IO.File.ReadAllTextAsync(await StorageIo.GetReadablePathAsync(picker[0]));
         var td = NAPLPS.Import.SvgImporter.ToTelidraw(svgXml);
 
         await LoadTelidrawSource(td);
@@ -911,9 +919,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task ImportBitmap()
     {
-        if (App.MainWindow == null) { return; }
+        if (Shell.StorageProvider == null) { return; }
 
-        var picker = await App.MainWindow.StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+        var picker = await Shell.StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
         {
             Title = "Import Bitmap",
             AllowMultiple = false,
@@ -921,7 +929,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         });
         if (picker.Count == 0) { return; }
 
-        var td = NAPLPS.Import.BitmapImporter.ToTelidraw(picker[0].Path.LocalPath);
+        var td = NAPLPS.Import.BitmapImporter.ToTelidraw(await StorageIo.GetReadablePathAsync(picker[0]));
         await LoadTelidrawSource(td);
     }
 
@@ -957,7 +965,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task Export()
     {
-        if (App.MainWindow == null || drawContext == null)
+        if (Shell.StorageProvider == null || drawContext == null)
         {
             return;
         }
@@ -970,7 +978,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         int waitCount = loadedFile?.Commands.Count(s => s.Command is NAPLPS.Commands.WaitCommand wc && wc.IsValid) ?? 0;
         int estimatedFrames = waitCount + 1;
 
-        var vm = await ExportDialog.PromptAsync(App.MainWindow, drawContext.Image.Width, drawContext.Image.Height, estimatedFrames);
+        var vm = await ExportDialogView.PromptAsync(drawContext.Image.Width, drawContext.Image.Height, estimatedFrames);
         if (vm == null) { return; }
 
         var (ext, patterns, label) = vm.Format switch
@@ -991,10 +999,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             SuggestedFileName = IOPath.GetFileNameWithoutExtension(loadedFilePath)
         };
 
-        var result = await App.MainWindow.StorageProvider.SaveFilePickerAsync(options);
+        var result = await Shell.StorageProvider.SaveFilePickerAsync(options);
         if (result == null) { return; }
 
-        var path = result.Path.LocalPath;
+        // Render into a local (or WASM-staged) file first, then stream that into the picked
+        // storage item - a plain write on desktop, a download in the browser.
+        var path = result.TryGetLocalPath() ?? IOPath.Combine(IOPath.GetTempPath(), result.Name);
 
         // APNG path is fundamentally different: it walks the command sequence and emits a frame per
         // step with WAIT-driven inter-frame timing baked in. Single-frame formats just snapshot the
@@ -1013,6 +1023,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 : (SixLabors.ImageSharp.Size?)null;
 
             drawContext.RenderApngToFile(path, delayHundredths, vm.ApngLoop, vm.ApngBlinkCycles, vm.ApngStartFrame, vm.ApngEndFrame, outputSize);
+
+            if (result.TryGetLocalPath() == null)
+            {
+                await StorageIo.WriteFromPathAsync(result, path);
+            }
 
             return;
         }
@@ -1043,6 +1058,11 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
                 await image.SaveAsGifAsync(path);
                 break;
         }
+
+        if (result.TryGetLocalPath() == null)
+        {
+            await StorageIo.WriteFromPathAsync(result, path);
+        }
     }
 
     [RelayCommand]
@@ -1055,7 +1075,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         FileClose();
 
-        App.MainWindow?.Close();
+        // Desktop: close the app window. Single-view (browser): there is nothing to close.
+        (Shell.TopLevel as Window)?.Close();
     }
 
     #endregion
@@ -1153,20 +1174,20 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         if (sequenceWindow == null)
         {
-            sequenceWindow = new SequenceWindow(drawContext, undoManager);
+            var view = new SequenceView(drawContext, undoManager);
 
-            if (sequenceWindow.DataContext == null)
+            if (view.DataContext is not SequenceWindowViewModel sequenceVm)
             {
                 return;
             }
 
-            ((SequenceWindowViewModel)sequenceWindow.DataContext).FrameChanged += async (sender, index) =>
+            sequenceVm.FrameChanged += async (sender, index) =>
             {
                 await RenderToFrame(index);
             };
 
+            sequenceWindow = Shell.Show(view, new ChildShellOptions("Sequence View") { Width = 800, Height = 450 });
             sequenceWindow.Closed += (s, e) => sequenceWindow = null;
-            sequenceWindow.Show();
         }
         else
         {
@@ -1180,9 +1201,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     {
         if (layersWindow == null)
         {
-            layersWindow = new LayersWindow(LayerManager);
+            layersWindow = Shell.Show(new LayersView(LayerManager), new ChildShellOptions("Layers") { Width = 360, Height = 420 });
             layersWindow.Closed += (_, _) => layersWindow = null;
-            layersWindow.Show();
         }
         else
         {
@@ -1251,23 +1271,23 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private async Task Help()
     {
-        if (App.MainWindow == null || App.MainWindow.Launcher == null)
+        if (Shell.Launcher == null)
         {
             return;
         }
 
-        await App.MainWindow.Launcher.LaunchUriAsync(new Uri("https://github.com/FoxCouncil/NAPLPS/issues"));
+        await Shell.Launcher.LaunchUriAsync(new Uri("https://github.com/FoxCouncil/NAPLPS/issues"));
     }
 
     [RelayCommand]
     private async Task GitHub()
     {
-        if (App.MainWindow == null || App.MainWindow.Launcher == null)
+        if (Shell.Launcher == null)
         {
             return;
         }
 
-        await App.MainWindow.Launcher.LaunchUriAsync(new Uri("https://github.com/FoxCouncil/NAPLPS"));
+        await Shell.Launcher.LaunchUriAsync(new Uri("https://github.com/FoxCouncil/NAPLPS"));
     }
 
     [RelayCommand]
@@ -1612,6 +1632,14 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void StartNetworkListener()
     {
+        // The browser sandbox has no TCP: StartListening would throw PlatformNotSupported
+        // deep in the socket stack, so surface a status message instead.
+        if (OperatingSystem.IsBrowser())
+        {
+            NetworkStatus = "Network: unavailable in the browser";
+            return;
+        }
+
         // Hook events on first start (idempotent per service instance).
         _network.StatusChanged -= HandleNetworkStatus;
         _network.StatusChanged += HandleNetworkStatus;
@@ -2094,14 +2122,14 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     /// followed by END.
     /// </summary>
     [RelayCommand]
-    private async Task OpenDrcsDesigner(Window parent)
+    private async Task OpenDrcsDesigner()
     {
         if (loadedFile == null)
         {
             return;
         }
 
-        var result = await DrcsDesignerWindow.PromptAsync(parent);
+        var result = await DrcsDesignerView.PromptAsync();
 
         if (result is not var (slot, bitmap))
         {
@@ -2126,14 +2154,14 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     /// the mask id (4/1-4/4) + pattern bytes + mask bytes, followed by END.
     /// </summary>
     [RelayCommand]
-    private async Task OpenTextureDesigner(Window parent)
+    private async Task OpenTextureDesigner()
     {
         if (loadedFile == null)
         {
             return;
         }
 
-        var result = await TextureDesignerWindow.PromptAsync(parent);
+        var result = await TextureDesignerView.PromptAsync();
 
         if (result is not var (maskId, pattern, mask))
         {
@@ -2425,9 +2453,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
-            if (App.MainWindow != null)
+            if (Shell.TopLevel != null)
             {
-                await MessageBoxManager.GetMessageBoxStandard("Error", $"Failed to render frame: {ex.Message}").ShowAsync();
+                await Shell.ShowMessageAsync("Error", $"Failed to render frame: {ex.Message}");
             }
         }
         finally
@@ -2647,9 +2675,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
-            if (App.MainWindow != null)
+            if (Shell.TopLevel != null)
             {
-                await MessageBoxManager.GetMessageBoxStandard("Error", $"Failed to load file: {ex.Message}").ShowAsync();
+                await Shell.ShowMessageAsync("Error", $"Failed to load file: {ex.Message}");
             }
         }
     }
@@ -2703,7 +2731,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         IsDiagnosticsPanelVisible = false;
     }
 
-    private Window? propertiesWindow;
+    private IChildShell? propertiesWindow;
 
     [RelayCommand]
     private void Properties()
@@ -2719,14 +2747,14 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     private void ShowPropertiesWindow(int startTab)
     {
-        if (loadedFile == null || App.MainWindow == null)
+        if (loadedFile == null || Shell.TopLevel == null)
         {
             return;
         }
 
         if (propertiesWindow != null)
         {
-            if (propertiesWindow.DataContext is PropertiesWindowViewModel existingVm)
+            if (propertiesWindow.View.DataContext is PropertiesWindowViewModel existingVm)
             {
                 existingVm.SelectedTabIndex = startTab;
             }
@@ -2737,13 +2765,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         var vm = PropertiesWindowViewModel.FromFile(loadedFile, loadedFilePath, DiagnosticItems, startTab);
 
-        propertiesWindow = new PropertiesWindow
-        {
-            DataContext = vm
-        };
-
+        propertiesWindow = Shell.Show(new PropertiesView { DataContext = vm }, new ChildShellOptions("File Properties") { Width = 580, Height = 560 });
         propertiesWindow.Closed += (_, _) => propertiesWindow = null;
-        propertiesWindow.Show(App.MainWindow);
     }
 
     private void BuildDrawContext()
@@ -2846,11 +2869,9 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
-            if (App.MainWindow != null)
+            if (Shell.TopLevel != null)
             {
-                var messageBox = MessageBoxManager.GetMessageBoxStandard("Error", $"Failed to update canvas: {ex.Message}");
-
-                await messageBox.ShowAsync();
+                await Shell.ShowMessageAsync("Error", $"Failed to update canvas: {ex.Message}");
             }
         }
         finally

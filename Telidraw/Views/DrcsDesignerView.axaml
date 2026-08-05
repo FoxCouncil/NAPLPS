@@ -1,16 +1,13 @@
-<Window xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 		xmlns:vm="using:Telidraw.ViewModels"
 		xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
 		xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
 		xmlns:i="using:Telidraw.Icons"
 		mc:Ignorable="d" d:DesignWidth="360" d:DesignHeight="480"
-		Width="360" Height="480"
-		x:Class="Telidraw.Views.DrcsDesignerWindow"
-		x:DataType="vm:DrcsDesignerViewModel"
-		Icon="/Assets/naplps.ico"
-		Title="DRCS Character Designer"
-		WindowStartupLocation="CenterOwner">
+	
+		x:Class="Telidraw.Views.DrcsDesignerView"
+		x:DataType="vm:DrcsDesignerViewModel">
 	<DockPanel Margin="10">
 		<!-- Top: slot picker and helper text -->
 		<StackPanel DockPanel.Dock="Top" Orientation="Vertical" Spacing="6" Margin="0,0,0,10">
@@ -27,10 +24,9 @@
 
 		<!-- Bottom: OK / Cancel -->
 		<StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,10,0,0">
-			<Button Content="Cancel" Command="{Binding CancelCommand}" CommandParameter="{Binding $parent[Window]}"/>
+			<Button Content="Cancel" Command="{Binding CancelCommand}"/>
 			<Button Content="Commit DRCS"
 					Command="{Binding CommitCommand}"
-					CommandParameter="{Binding $parent[Window]}"
 					Classes="accent"/>
 		</StackPanel>
 
@@ -62,4 +58,4 @@
 			</ItemsControl>
 		</Border>
 	</DockPanel>
-</Window>
+</UserControl>

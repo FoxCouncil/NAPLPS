@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 		xmlns:vm="using:Telidraw.ViewModels"
 		xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -8,11 +8,9 @@
 		xmlns:converters="clr-namespace:Telidraw.Converters"
 		xmlns:Media="using:Avalonia.Media"
 		mc:Ignorable="d" d:DesignWidth="640" d:DesignHeight="200"
-		Width="640" Height="200"
-		x:Class="Telidraw.Views.AddCommandWindow"
-		x:DataType="vm:AddCommandViewModel"
-		Icon="/Assets/naplps.ico"
-		Title="Add Command">
+	
+		x:Class="Telidraw.Views.AddCommandView"
+		x:DataType="vm:AddCommandViewModel">
 	<Grid RowDefinitions="Auto,*" ColumnDefinitions="*">
 		<!-- Top Section: ComboBox -->
 		<ComboBox
@@ -30,4 +28,4 @@
 		<!-- Bottom Section: Command-specific Inputs -->
 		<TextBlock Grid.Row="1" Text="{Binding SelectedCommand}" HorizontalAlignment="Center" VerticalAlignment="Center" />
 	</Grid>
-</Window>
+</UserControl>

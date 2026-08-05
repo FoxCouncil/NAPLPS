@@ -85,7 +85,7 @@ public partial class SequenceWindowViewModel : ViewModelBase
 
     private NaplpsFormat loadedFile => context.NAPLPS;
 
-    private Window? addCommandWindow;
+    private Telidraw.Services.IChildShell? addCommandWindow;
 
     public event EventHandler<int>? FrameChanged;
 
@@ -419,14 +419,12 @@ public partial class SequenceWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private void Add(Window parent)
+    private void Add()
     {
         if (addCommandWindow == null)
         {
-            addCommandWindow = new AddCommandWindow();
-
+            addCommandWindow = Telidraw.Services.Shell.Show(new AddCommandView(), new Telidraw.Services.ChildShellOptions("Add Command") { Width = 640, Height = 200, Modal = true });
             addCommandWindow.Closed += (s, e) => addCommandWindow = null;
-            addCommandWindow.ShowDialog(parent);
         }
         else
         {
@@ -436,7 +434,7 @@ public partial class SequenceWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private async Task Delete(Window parent)
+    private async Task Delete()
     {
         if (SelectedCommand == null)
         {
@@ -444,7 +442,6 @@ public partial class SequenceWindowViewModel : ViewModelBase
         }
 
         if (!await Program.ShowQuestionDialogBox(
-            parent,
             "Delete Command " + SelectedCommand.ToString(),
             "Are you sure you want to delete this command?\n\n" + SelectedCommand.ToString())
         )
@@ -487,7 +484,7 @@ public partial class SequenceWindowViewModel : ViewModelBase
     /// the command gets re-instantiated with the new bytes.
     /// </summary>
     [RelayCommand]
-    private async Task EditOperands(Window parent)
+    private async Task EditOperands()
     {
         if (!TryGetSelectedIndex(out var index))
         {
@@ -495,7 +492,7 @@ public partial class SequenceWindowViewModel : ViewModelBase
         }
 
         var src = loadedFile.Commands[index].Command;
-        var newOperands = await OperandEditWindow.PromptAsync(parent, src.OpCode, new NaplpsOperands(src.Operands));
+        var newOperands = await OperandEditView.PromptAsync(src.OpCode, new NaplpsOperands(src.Operands));
 
         if (newOperands == null)
         {

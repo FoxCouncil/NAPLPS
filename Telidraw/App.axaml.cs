@@ -4,13 +4,13 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Telidraw.Resources;
+using Telidraw.Services;
+using Telidraw.Views;
 
 namespace Telidraw;
 
 public partial class App : Application
 {
-    public static Window? MainWindow { get; private set; }
-
     // A file handed to us by the OS (Finder "Open With", double-click, Quick Look "Open with")
     // can arrive before the main window exists; stash it and flush once the window is ready.
     private string? _pendingOpenPath;
@@ -36,12 +36,29 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            MainWindow = new MainWindow
+            Shell.MainViewModel = new MainWindowViewModel();
+
+            var window = new MainWindow
             {
-                DataContext = new MainWindowViewModel()
+                DataContext = Shell.MainViewModel
             };
 
-            desktop.MainWindow = MainWindow;
+            // MainView refreshes this on attach; setting it here just guarantees the shell
+            // has a top level before any startup code asks for one.
+            Shell.TopLevel = window;
+
+            desktop.MainWindow = window;
+        }
+        else if (ApplicationLifetime is ISingleViewApplicationLifetime singleView)
+        {
+            // Browser (and later mobile): no Window exists. MainView IS the application;
+            // it registers itself with the Shell when it attaches to the visual tree.
+            Shell.MainViewModel = new MainWindowViewModel();
+
+            singleView.MainView = new MainView
+            {
+                DataContext = Shell.MainViewModel
+            };
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -68,7 +85,7 @@ public partial class App : Application
             return;
         }
 
-        if (MainWindow?.DataContext is MainWindowViewModel)
+        if (Shell.MainViewModel is not null)
         {
             OpenFileInMainWindow(path);
         }
@@ -83,7 +100,7 @@ public partial class App : Application
     {
         Dispatcher.UIThread.Post(async () =>
         {
-            if (MainWindow?.DataContext is MainWindowViewModel vm)
+            if (Shell.MainViewModel is { } vm)
             {
                 await vm.OpenExternalFile(path);
             }

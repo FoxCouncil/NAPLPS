@@ -2,9 +2,9 @@
 
 namespace Telidraw.Views;
 
-public partial class AddCommandWindow : Window
+public partial class AddCommandView : UserControl
 {
-    public AddCommandWindow()
+    public AddCommandView()
     {
         InitializeComponent();
 

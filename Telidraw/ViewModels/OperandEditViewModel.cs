@@ -48,8 +48,11 @@ public partial class OperandEditViewModel : ViewModelBase
         OperandHex = string.Join(" ", currentOperands.Select(b => b.ToString("X2")));
     }
 
+    /// <summary>Raised when the dialog should close; the hosting view routes it to its shell.</summary>
+    public event Action? RequestClose;
+
     [RelayCommand]
-    private void Commit(Window host)
+    private void Commit()
     {
         if (!TryParseHex(OperandHex, out var bytes, out var error))
         {
@@ -60,13 +63,13 @@ public partial class OperandEditViewModel : ViewModelBase
         ParseError = string.Empty;
         ResultOperands = bytes;
         IsCommitted = true;
-        host.Close();
+        RequestClose?.Invoke();
     }
 
     [RelayCommand]
-    private static void Cancel(Window host)
+    private void Cancel()
     {
-        host.Close();
+        RequestClose?.Invoke();
     }
 
     private static bool TryParseHex(string input, out NaplpsOperands result, out string error)
