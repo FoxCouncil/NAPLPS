@@ -86,6 +86,17 @@ jobs:
           # Without this, Pages' Jekyll pass drops the _framework directory the loader needs.
           touch "$GITHUB_WORKSPACE/_site/.nojekyll"
 
+      # The repo's .nap corpus, served next to the bundle so the editor's File > Open
+      # Example picker can fetch it same-origin. examples.json is the picker's manifest.
+      - name: Add example corpus to editor
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          find Examples -type f -iname '*.nap' | sort | while IFS= read -r f; do
+            mkdir -p "$GITHUB_WORKSPACE/_site/editor/$(dirname "$f")"
+            cp "$f" "$GITHUB_WORKSPACE/_site/editor/$f"
+          done
+          find Examples -type f -iname '*.nap' | sort | jq -R . | jq -s -c . > "$GITHUB_WORKSPACE/_site/editor/examples.json"
+
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
           path: _site

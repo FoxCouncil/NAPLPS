@@ -59,6 +59,20 @@ public partial class App : Application
             {
                 DataContext = Shell.MainViewModel
             };
+
+            // Gallery deep link: /editor/?open=Examples/foo.nap fetches that corpus file
+            // from the site and loads it once the view is up.
+            if (Shell.GetBaseUriQueryParam("open") is { } openPath)
+            {
+                Dispatcher.UIThread.Post(async () =>
+                {
+                    if (Shell.MainViewModel is { } vm)
+                    {
+                        await vm.LoadFromSiteAsync(openPath);
+                    }
+                });
+            }
+
         }
 
         base.OnFrameworkInitializationCompleted();

@@ -180,6 +180,7 @@ public static class Pages
             sb.AppendLine("</table>");
 
             sb.AppendLine("<p class='links'>");
+            sb.AppendLine($"<a href='../editor/?open={Uri.EscapeDataString($"Examples/{r.SourceRelative}")}'>Open in editor</a>");
             sb.AppendLine($"<a href='../{r.ApngAsset}' download='{Html.Encode(r.Title)}.apng'>Download APNG</a>");
             sb.AppendLine($"<a href='../{r.PosterAsset}'>Poster frame PNG</a>");
             sb.AppendLine($"<a href='https://github.com/FoxCouncil/NAPLPS/blob/main/Examples/{Uri.EscapeDataString(r.SourceRelative).Replace("%2F", "/")}'>Source file</a>");

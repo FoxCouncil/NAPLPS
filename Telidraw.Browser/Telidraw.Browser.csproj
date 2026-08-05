@@ -12,6 +12,17 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<!-- The IL trimmer strips types it cannot prove reachable, which breaks libraries
+		     that resolve members lazily: MsBox (built against Avalonia 11, its DTO fields
+		     reference enums the trimmer discards - the About-box crash), and the app +
+		     codec assemblies whose commands are instantiated via Activator. Rooting keeps
+		     them whole; the framework itself still trims. -->
+		<TrimmerRootAssembly Include="Telidraw" />
+		<TrimmerRootAssembly Include="NAPLPS" />
+		<TrimmerRootAssembly Include="MsBox.Avalonia" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<ProjectReference Include="..\Telidraw\Telidraw.csproj" />
 	</ItemGroup>
 </Project>

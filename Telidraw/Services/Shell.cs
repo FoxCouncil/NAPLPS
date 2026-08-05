@@ -65,6 +65,34 @@ public static class Shell
     /// <summary>The one MainWindowViewModel, reachable without a Window. Set by App.</summary>
     public static MainWindowViewModel? MainViewModel { get; set; }
 
+    /// <summary>
+    /// Where the app is served from, when it is served at all: the browser head sets this
+    /// to the page URL before Avalonia starts. Null on desktop. Site-relative resources
+    /// (the example corpus manifest) resolve against it.
+    /// </summary>
+    public static Uri? BaseUri { get; set; }
+
+    /// <summary>A query parameter from <see cref="BaseUri"/>, unescaped, or null.</summary>
+    public static string? GetBaseUriQueryParam(string name)
+    {
+        if (BaseUri?.Query is not { Length: > 1 } query)
+        {
+            return null;
+        }
+
+        foreach (var pair in query.TrimStart('?').Split('&'))
+        {
+            var eq = pair.IndexOf('=');
+
+            if (eq > 0 && pair[..eq] == name)
+            {
+                return Uri.UnescapeDataString(pair[(eq + 1)..]);
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>True when there is no OS window system to put child windows in.</summary>
     public static bool IsSingleView => TopLevel is not null and not Window;
 
@@ -87,7 +115,7 @@ public static class Shell
                 Content = view,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 CanResize = options.CanResize,
-                Icon = TryLoadAppIcon(),
+                Icon = AppIcon,
             };
 
             if (!double.IsNaN(options.Width)) { window.Width = options.Width; }
@@ -175,6 +203,14 @@ public static class Shell
     }
 
     private static WindowIcon? _appIcon;
+
+    /// <summary>
+    /// The app icon as a window icon, or null when there is no window system to show it
+    /// in. Constructing a WindowIcon requires the platform icon loader, which single-view
+    /// backends (browser, mobile) do not register - it would throw, which is why every
+    /// icon assignment must come through here instead of newing one up.
+    /// </summary>
+    public static WindowIcon? AppIcon => TopLevel is Window ? TryLoadAppIcon() : null;
 
     private static WindowIcon? TryLoadAppIcon()
     {

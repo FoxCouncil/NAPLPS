@@ -1000,7 +1000,7 @@ sealed class Program
             ContentTitle = "About Telidraw",
             ContentMessage = $"{bigDescription}\n\nCreated by Fox & Contributors!\n\tpheller\n\tportyspice",
             ButtonDefinitions = [new ButtonDefinition { Name = "Cool Beans!", IsDefault = true }],
-            WindowIcon = new WindowIcon(iconBitmap), // Set the window icon
+            WindowIcon = Telidraw.Services.Shell.AppIcon, // Null under single-view: constructing one there throws.
             ImageIcon = iconBitmap,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             MinWidth = 520,
@@ -1023,7 +1023,7 @@ sealed class Program
             ContentTitle = "Question",
             ContentMessage = question,
             ButtonDefinitions = [new ButtonDefinition { Name = "Yes", IsDefault = true }, new ButtonDefinition { Name = "No" }],
-            WindowIcon = new WindowIcon(iconBitmap), // Set the window icon
+            WindowIcon = Telidraw.Services.Shell.AppIcon, // Null under single-view: constructing one there throws.
             ImageIcon = iconBitmap,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             // Default dialog chrome cuts off multi-line prompts. Give a sensible minimum,

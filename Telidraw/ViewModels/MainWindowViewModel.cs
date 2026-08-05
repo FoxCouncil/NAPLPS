@@ -665,6 +665,66 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     }
 
     /// <summary>
+    /// Browser-only: pick a .nap from the repo's example corpus served next to the WASM
+    /// bundle, fetch it, stage it into the in-memory filesystem and load it like any file.
+    /// </summary>
+    [RelayCommand]
+    private async Task OpenExample()
+    {
+        if (Shell.BaseUri is not { } baseUri)
+        {
+            return;
+        }
+
+        if (!await PromptSaveIfDirty())
+        {
+            return;
+        }
+
+        var relativePath = await Views.ExamplesView.PromptAsync();
+
+        if (relativePath == null)
+        {
+            return;
+        }
+
+        await LoadFromSiteAsync(relativePath);
+    }
+
+    /// <summary>
+    /// Fetch a corpus file served next to the WASM bundle and load it. Backs both the
+    /// example picker and the gallery's "Open in editor" deep link (?open=Examples/...).
+    /// Same-origin corpus paths only - this is a document loader, not a URL fetcher.
+    /// </summary>
+    public async Task LoadFromSiteAsync(string relativePath)
+    {
+        if (Shell.BaseUri is not { } baseUri)
+        {
+            return;
+        }
+
+        if (relativePath.Contains("://") || relativePath.StartsWith("//") || relativePath.Contains(".."))
+        {
+            return;
+        }
+
+        try
+        {
+            using var http = new System.Net.Http.HttpClient();
+            var bytes = await http.GetByteArrayAsync(new Uri(baseUri, relativePath));
+
+            var staged = IOPath.Combine(IOPath.GetTempPath(), IOPath.GetFileName(relativePath));
+            await System.IO.File.WriteAllBytesAsync(staged, bytes);
+
+            await FileLoad(staged);
+        }
+        catch (Exception ex)
+        {
+            await Shell.ShowMessageAsync("Error", $"Failed to fetch example: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Opens a file handed to the app from outside the picker (Finder open, drag onto the Dock
     /// icon, "Open With"). Same dirty-check-then-load path as the in-app File > Open.
     /// </summary>

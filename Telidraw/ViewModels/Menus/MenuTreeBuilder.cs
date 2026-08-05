@@ -16,16 +16,27 @@ public static class MenuTreeBuilder
         Func<MainWindowViewModel, bool> fileLoaded = v => v.IsFileLoaded;
         Func<MainWindowViewModel, bool> macroRecording = v => v.IsMacroRecording;
 
+        var fileChildren = new List<MenuNode>
+        {
+            new MenuNode { Header = "New", Command = vm.NewCommand, FontAwesomeIcon = "fa-solid fa-file" },
+            MenuNode.Separator,
+            new MenuNode { Header = "Open", Command = vm.OpenCommand, FontAwesomeIcon = "fa-solid fa-folder-open" },
+        };
+
+        // Only where the app is served from a site carrying the corpus (the browser build
+        // on GitHub Pages) - the desktop app has a real filesystem instead.
+        if (Telidraw.Services.Shell.BaseUri is not null)
+        {
+            fileChildren.Add(new MenuNode { Header = "Open Example...", Command = vm.OpenExampleCommand, FontAwesomeIcon = "fa-solid fa-images", ToolTip = "Load a .nap from the repository's example corpus" });
+        }
+
         return new[]
         {
             new MenuNode
             {
                 Header = "File",
-                Children = new[]
+                Children = fileChildren.Concat(new[]
                 {
-                    new MenuNode { Header = "New", Command = vm.NewCommand, FontAwesomeIcon = "fa-solid fa-file" },
-                    MenuNode.Separator,
-                    new MenuNode { Header = "Open", Command = vm.OpenCommand, FontAwesomeIcon = "fa-solid fa-folder-open" },
                     new MenuNode { Header = "Save", Command = vm.SaveCommand, Gesture = gestures.Save, FontAwesomeIcon = "fa-solid fa-floppy-disk", IsEnabledFn = fileLoaded },
                     new MenuNode { Header = "Save As...", Command = vm.SaveAsCommand, Gesture = gestures.SaveAs, FontAwesomeIcon = "fa-solid fa-floppy-disk", IsEnabledFn = fileLoaded },
                     new MenuNode { Header = "Close", Command = vm.CloseCommand, FontAwesomeIcon = "fa-solid fa-circle-xmark", IsEnabledFn = fileLoaded },
@@ -46,7 +57,7 @@ public static class MenuTreeBuilder
                     new MenuNode { Header = "Clear Reference Image", Command = vm.ClearReferenceImageCommand, FontAwesomeIcon = "fa-solid fa-ban", IsEnabledFn = v => v.IsReferenceImageLoaded },
                     MenuNode.Separator,
                     new MenuNode { Header = "Quit", Command = vm.QuitCommand, FontAwesomeIcon = "fa-solid fa-door-open" }
-                }
+                }).ToArray()
             },
             new MenuNode
             {
