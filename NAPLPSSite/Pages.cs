@@ -131,7 +131,7 @@ public static class Pages
             var ld = Html.ImageObjectLd(baseUrl, r, canonical);
 
             var sb = new StringBuilder();
-            sb.Append(Html.Head($"{r.Title} — {Html.SiteName}", description, canonical, baseUrl, r.PosterAsset, 1, ld,
+            sb.Append(Html.Head($"{r.Title} | {Html.SiteName}", description, canonical, baseUrl, r.PosterAsset, 1, ld,
                 $"{r.Title}, {r.Collection}, {r.SystemType}, NAPLPS, videotex, retrocomputing"));
 
             sb.AppendLine($"<!-- *licks* {Html.Encode(r.Title)}, YUM! -->");
@@ -139,10 +139,19 @@ public static class Pages
             sb.AppendLine($"<h1>{Html.Encode(r.Title)}</h1>");
             sb.AppendLine($"<p class='lede'>{Html.Encode(description)}</p>");
 
+            // APNG is the default view; the editor is opt-in because it pulls the whole .NET wasm
+            // runtime, which is not something to spend on a reader who only wanted to see the art.
+            sb.AppendLine("<div class='viewtabs'>");
+            sb.AppendLine("<button class='vt on' type='button' data-view='apng' aria-pressed='true'>APNG</button>");
+            sb.AppendLine("<button class='vt' type='button' data-view='editor' aria-pressed='false'>Open in editor</button>");
+            sb.AppendLine("</div>");
+
             // Canvas-based player so the drawing sequence can be scrubbed. The <img> underneath is
             // the fallback: without JavaScript, or if decoding fails, the browser still animates
             // the APNG on its own - just without transport controls.
-            sb.AppendLine($"<figure class='stage player' data-src='../{r.ApngAsset}'>");
+            // --w carries the render's own pixel width so the canvas, the transport bar and the
+            // caption all share one edge instead of the figure spanning the full column.
+            sb.AppendLine($"<figure class='stage player' style='--w:{r.Width}px' data-src='../{r.ApngAsset}'>");
             sb.AppendLine($"<canvas width='{r.Width}' height='{r.Height}' aria-label='{Html.Encode(r.Title)} render'></canvas>");
             sb.AppendLine($"<noscript><img src='../{r.ApngAsset}' width='{r.Width}' height='{r.Height}' alt='{Html.Encode(r.Title)} animated render'></noscript>");
             sb.AppendLine($"<img class='p-fallback' hidden src='../{r.ApngAsset}' width='{r.Width}' height='{r.Height}' alt='{Html.Encode(r.Title)} animated render'>");
@@ -160,16 +169,57 @@ public static class Pages
             foreach (var rate in NAPLPS.NaplpsBaud.Rates)
             {
                 var live = rate == NAPLPS.NaplpsBaud.Default;
-                sb.AppendLine($"<option value='{rate}'{(live ? " selected" : "")}>{NAPLPS.NaplpsBaud.Describe(rate)}{(live ? " &mdash; live" : "")}</option>");
+                sb.AppendLine($"<option value='{rate}'{(live ? " selected" : "")}>{NAPLPS.NaplpsBaud.Describe(rate)}{(live ? " (live)" : "")}</option>");
             }
 
             sb.AppendLine("</select>");
-            sb.AppendLine("<span class='p-frame'>&mdash;</span>");
+            sb.AppendLine("<span class='p-frame'></span>");
             sb.AppendLine("<span class='p-time'></span>");
             sb.AppendLine("</div>");
 
             sb.AppendLine($"<figcaption>Animated PNG &middot; {r.FrameCount:N0} frames &middot; {Html.Bytes(r.ApngBytes)} &middot; plays at the line speed you pick; {NAPLPS.NaplpsBaud.Describe(NAPLPS.NaplpsBaud.Default)} is how it actually arrived &middot; space to play/pause, arrows to step</figcaption>");
             sb.AppendLine("</figure>");
+
+            // src is withheld until the tab is first used, so the runtime download is opt-in.
+            sb.AppendLine("<div class='editorwrap' hidden>");
+            sb.AppendLine($"<iframe class='editorframe' loading='lazy' data-src='../editor/?open={Uri.EscapeDataString($"Examples/{r.SourceRelative}")}' title='{Html.Encode(r.Title)} in the Telidraw editor'></iframe>");
+            sb.AppendLine("<p class='note'>The editor runs entirely in your browser. The first switch downloads the .NET runtime.</p>");
+            sb.AppendLine("</div>");
+
+            sb.AppendLine("""
+                <script>
+                (function () {
+                  const tabs = document.querySelectorAll('.vt');
+                  const stage = document.querySelector('.stage');
+                  const wrap = document.querySelector('.editorwrap');
+                  const frame = wrap && wrap.querySelector('.editorframe');
+                  if (!tabs.length || !stage || !wrap || !frame) return;
+
+                  tabs.forEach(tab => tab.addEventListener('click', () => {
+                    const editor = tab.dataset.view === 'editor';
+
+                    tabs.forEach(t => {
+                      const on = t === tab;
+                      t.classList.toggle('on', on);
+                      t.setAttribute('aria-pressed', on ? 'true' : 'false');
+                    });
+
+                    if (editor && !frame.src) { frame.src = frame.dataset.src; }
+
+                    // Paused rather than left running behind the iframe, so switching away does not
+                    // leave a decoder chewing frames no one is looking at. The player keeps its
+                    // play state internally; the button's aria-label is the only outside signal.
+                    if (editor) {
+                      const play = stage.querySelector('.p-play');
+                      if (play && play.getAttribute('aria-label') === 'Pause') { play.click(); }
+                    }
+
+                    stage.hidden = editor;
+                    wrap.hidden = !editor;
+                  }));
+                })();
+                </script>
+                """);
 
             sb.AppendLine("<table class='facts'>");
             Row(sb, "Source", r.SourceRelative);
@@ -209,7 +259,7 @@ public static class Pages
         var ld = Html.BreadcrumbLd(baseUrl, ("Home", "index.html"), ("Gallery", "gallery/index.html"), ("Changes", "changes/index.html"));
 
         var sb = new StringBuilder();
-        sb.Append(Html.Head($"Recent changes — {Html.SiteName}", description, "changes/index.html", baseUrl, null, 1, ld,
+        sb.Append(Html.Head($"Recent changes | {Html.SiteName}", description, "changes/index.html", baseUrl, null, 1, ld,
             "NAPLPS renderer changes, visual regression, before and after"));
 
         sb.AppendLine("<nav class='crumb'><a href='../gallery/index.html'>Gallery</a> / <span>Changes</span></nav>");
@@ -238,11 +288,11 @@ public static class Pages
         foreach (var c in commits)
         {
             var canonical = $"changes/{c.Slug}.html";
-            var description = $"{c.Commit.Subject} — {c.Changes.Count:N0} artworks changed, {c.TotalDiffPixels:N0} pixels different, committed {c.Commit.Date:yyyy-MM-dd}.";
+            var description = $"{c.Commit.Subject}: {c.Changes.Count:N0} artworks changed, {c.TotalDiffPixels:N0} pixels different, committed {c.Commit.Date:yyyy-MM-dd}.";
             var ld = Html.BreadcrumbLd(baseUrl, ("Home", "index.html"), ("Gallery", "gallery/index.html"), ("Changes", "changes/index.html"), (c.Commit.ShortSha, canonical));
 
             var sb = new StringBuilder();
-            sb.Append(Html.Head($"{c.Commit.Subject} — {Html.SiteName}", description, canonical, baseUrl,
+            sb.Append(Html.Head($"{c.Commit.Subject} | {Html.SiteName}", description, canonical, baseUrl,
                 c.Changes.FirstOrDefault()?.DiffAsset, 1, ld, "NAPLPS, visual diff, renderer change"));
 
             sb.AppendLine("<nav class='crumb'><a href='../gallery/index.html'>Gallery</a> / <a href='index.html'>Changes</a> / <span>" + Html.Encode(c.Commit.ShortSha) + "</span></nav>");
@@ -267,7 +317,7 @@ public static class Pages
 
                 if (ch.IsNew)
                 {
-                    sb.AppendLine("<p class='meta'>New baseline &mdash; no previous render to compare.</p>");
+                    sb.AppendLine("<p class='meta'>New baseline, no previous render to compare.</p>");
                     sb.AppendLine("<div class='pair'>");
                     sb.AppendLine($"<figure><figcaption>Added</figcaption><img src='../{ch.AfterApngAsset}' loading='lazy' alt='{Html.Encode(ch.Title)}'></figure>");
                     sb.AppendLine("</div>");
@@ -403,12 +453,22 @@ public static class Pages
             .card.playing { border-color: #58a6ff; }
             .card.playing .name { color: #58a6ff; }
             .card img { display: block; width: 100%; height: auto; background: #000; image-rendering: pixelated; }
-            .card .name { display: block; padding: 8px 10px 0; color: #f0f6fc; font-size: 14px; word-break: break-all; }
+            .card .name { display: block; padding: 8px 10px 0; color: #f0f6fc; font-size: 14px; overflow-wrap: anywhere; }
             .card .meta { display: block; padding: 2px 10px 9px; color: #8b949e; font-size: 12px; }
-            .stage { margin: 0 0 22px; }
-            .stage img { max-width: 100%; height: auto; border: 1px solid #30363d; border-radius: 8px; background: #000; image-rendering: pixelated; }
+            /* --w is the render's own pixel width, set per page. Everything in the figure shares
+               that edge, so the transport bar stops overhanging the picture. */
+            .stage { margin: 0 0 22px; width: min(100%, var(--w, 100%)); }
+            .stage img { width: 100%; height: auto; border: 1px solid #30363d; border-radius: 8px; background: #000; image-rendering: pixelated; }
             .stage figcaption { color: #8b949e; font-size: 13px; margin-top: 8px; }
-            .stage canvas { max-width: 100%; height: auto; border: 1px solid #30363d; border-radius: 8px; background: #000; image-rendering: pixelated; display: block; }
+            .stage canvas { width: 100%; height: auto; border: 1px solid #30363d; border-radius: 8px; background: #000; image-rendering: pixelated; display: block; }
+            .viewtabs { display: flex; gap: 6px; margin-bottom: 12px; }
+            .vt { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
+            .vt:hover { border-color: #58a6ff; }
+            .vt.on { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+            /* Full column, unlike the stage: the editor needs room regardless of how small the
+               artwork's own canvas happens to be. */
+            .editorwrap { width: 100%; margin: 0 0 22px; }
+            .editorframe { width: 100%; aspect-ratio: 4 / 3; min-height: 460px; border: 1px solid #30363d; border-radius: 8px; background: #000; display: block; }
             .stage.failed canvas { display: none; }
             .transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; padding: 9px 11px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
             .transport button, .transport select { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 13px; }
@@ -421,7 +481,7 @@ public static class Pages
             .transport .p-time { color: #8b949e; font-size: 13px; min-width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
             .facts { border-collapse: collapse; margin-bottom: 20px; }
             .facts th { text-align: left; color: #8b949e; font-weight: 400; padding: 5px 22px 5px 0; vertical-align: top; white-space: nowrap; }
-            .facts td { padding: 5px 0; color: #f0f6fc; word-break: break-all; }
+            .facts td { padding: 5px 0; color: #f0f6fc; white-space: nowrap; }
             .links { display: flex; gap: 18px; flex-wrap: wrap; }
             .commits { list-style: none; padding: 0; margin: 0; }
             .commits li { padding: 14px 16px; margin-bottom: 10px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; }

@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
+// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
 using System.Text;
 using System.Text.Json;
@@ -13,7 +13,7 @@ namespace NAPLPSSite;
 /// </summary>
 public static class Html
 {
-    public const string SiteName = "Telidraw — Visual Corpus";
+    public const string SiteName = "Telidraw Visual Corpus";
 
     public const string Repo = "https://github.com/FoxCouncil/NAPLPS";
 
@@ -149,7 +149,7 @@ public static class Html
     {
         var frames = r.FrameCount == 1 ? "a single frame" : $"{r.FrameCount:N0} frames";
 
-        return $"{r.Title} — {r.SystemType} NAPLPS artwork from the {r.Collection} collection, "
+        return $"{r.Title}, {r.SystemType} NAPLPS artwork from the {r.Collection} collection, "
              + $"decoded from {r.CommandCount:N0} coded commands and rendered to {frames} at {r.Width}x{r.Height}.";
     }
 

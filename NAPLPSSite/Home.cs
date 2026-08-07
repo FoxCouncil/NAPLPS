@@ -40,7 +40,7 @@ public static class Home
         var ld = Html.BreadcrumbLd(baseUrl, ("Home", "index.html"));
 
         var sb = new StringBuilder();
-        sb.Append(Html.Head("Telidraw — NAPLPS toolkit and editor", description, "index.html", baseUrl,
+        sb.Append(Html.Head("Telidraw, a NAPLPS toolkit and editor", description, "index.html", baseUrl,
             renders.FirstOrDefault()?.PosterAsset, 0, ld,
             "NAPLPS, Telidraw, Telidon, Prodigy, videotex, ANSI X3.110, retrocomputing, vector graphics"));
 
