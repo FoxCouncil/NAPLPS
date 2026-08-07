@@ -149,7 +149,13 @@ public static class Html
     {
         var frames = r.FrameCount == 1 ? "a single frame" : $"{r.FrameCount:N0} frames";
 
-        return $"{r.Title}, {r.SystemType} NAPLPS artwork from the {r.Collection} collection, "
+        // Prodigy and Telidon qualify the format; plain NAPLPS would otherwise stutter as
+        // "NAPLPS NAPLPS artwork".
+        var kind = r.SystemType.Equals("NAPLPS", StringComparison.OrdinalIgnoreCase)
+            ? "NAPLPS"
+            : $"{r.SystemType} NAPLPS";
+
+        return $"{r.Title}, {kind} artwork from the {r.Collection} collection, "
              + $"decoded from {r.CommandCount:N0} coded commands and rendered to {frames} at {r.Width}x{r.Height}.";
     }
 

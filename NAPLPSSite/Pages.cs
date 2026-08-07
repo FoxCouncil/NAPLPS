@@ -137,7 +137,9 @@ public static class Pages
             sb.AppendLine($"<!-- *licks* {Html.Encode(r.Title)}, YUM! -->");
             sb.AppendLine($"<nav class='crumb'><a href='../gallery/index.html'>Gallery</a> / <span>{Html.Encode(r.Collection)}</span> / <span>{Html.Encode(r.Title)}</span></nav>");
             sb.AppendLine($"<h1>{Html.Encode(r.Title)}</h1>");
-            sb.AppendLine($"<p class='lede'>{Html.Encode(description)}</p>");
+
+            // The description stays in the metadata, where crawlers want it, but it says nothing
+            // the facts table below does not say better, so it is not repeated on the page.
 
             // APNG is the default view; the editor is opt-in because it pulls the whole .NET wasm
             // runtime, which is not something to spend on a reader who only wanted to see the art.
@@ -183,7 +185,6 @@ public static class Pages
             // src is withheld until the tab is first used, so the runtime download is opt-in.
             sb.AppendLine("<div class='editorwrap' hidden>");
             sb.AppendLine($"<iframe class='editorframe' loading='lazy' data-src='../editor/?open={Uri.EscapeDataString($"Examples/{r.SourceRelative}")}' title='{Html.Encode(r.Title)} in the Telidraw editor'></iframe>");
-            sb.AppendLine("<p class='note'>The editor runs entirely in your browser. The first switch downloads the .NET runtime.</p>");
             sb.AppendLine("</div>");
 
             sb.AppendLine("""
@@ -480,9 +481,9 @@ public static class Pages
             .transport .p-scrub { flex: 1; min-width: 160px; accent-color: #58a6ff; }
             .transport .p-frame { color: #f0f6fc; font-size: 13px; min-width: 150px; text-align: right; font-variant-numeric: tabular-nums; }
             .transport .p-time { color: #8b949e; font-size: 13px; min-width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
-            .facts { border-collapse: collapse; margin-bottom: 20px; }
-            .facts th { text-align: left; color: #8b949e; font-weight: 400; padding: 5px 22px 5px 0; vertical-align: top; white-space: nowrap; }
-            .facts td { padding: 5px 0; color: #f0f6fc; white-space: nowrap; }
+            .facts { border-collapse: collapse; margin-bottom: 20px; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+            .facts th { text-align: left; color: #8b949e; font-weight: 400; padding: 7px 18px; border: 1px solid #30363d; background: #161b22; white-space: nowrap; }
+            .facts td { padding: 7px 18px; color: #f0f6fc; border: 1px solid #30363d; white-space: nowrap; }
             .links { display: flex; gap: 18px; flex-wrap: wrap; }
             .commits { list-style: none; padding: 0; margin: 0; }
             .commits li { padding: 14px 16px; margin-bottom: 10px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
