@@ -95,8 +95,8 @@ public static class Html
         var sb = new StringBuilder();
         sb.AppendLine("</main>");
         sb.AppendLine("<footer class='site'>");
-        sb.AppendLine($"<p>Rendered by the Telidraw at <code>{Encode(builtSha[..Math.Min(8, builtSha.Length)])}</code> on {builtAt:yyyy-MM-dd}. ");
-        sb.AppendLine("Artwork is the property of its original authors; this corpus exists to verify the renderer.</p>");
+        sb.AppendLine($"<p>Built from <code>{Encode(builtSha[..Math.Min(8, builtSha.Length)])}</code> on {builtAt:yyyy-MM-dd}. "
+                    + "Artwork belongs to its original authors.</p>");
         sb.AppendLine("</footer>");
         sb.AppendLine("<!-- Yip, Fox loves you! -->");
         sb.AppendLine("</body></html>");
