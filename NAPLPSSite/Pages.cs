@@ -143,7 +143,7 @@ public static class Pages
             // runtime, which is not something to spend on a reader who only wanted to see the art.
             sb.AppendLine("<div class='viewtabs'>");
             sb.AppendLine("<button class='vt on' type='button' data-view='apng' aria-pressed='true'>APNG</button>");
-            sb.AppendLine("<button class='vt' type='button' data-view='editor' aria-pressed='false'>Open in editor</button>");
+            sb.AppendLine("<button class='vt' type='button' data-view='editor' aria-pressed='false'>Editor</button>");
             sb.AppendLine("</div>");
 
             // Canvas-based player so the drawing sequence can be scrubbed. The <img> underneath is
@@ -233,7 +233,8 @@ public static class Pages
             sb.AppendLine("</table>");
 
             sb.AppendLine("<p class='links'>");
-            sb.AppendLine($"<a href='../editor/?open={Uri.EscapeDataString($"Examples/{r.SourceRelative}")}'>Open in editor</a>");
+            // Distinct from the Editor view tab above, which embeds the same editor in place.
+            sb.AppendLine($"<a href='../editor/?open={Uri.EscapeDataString($"Examples/{r.SourceRelative}")}'>Editor, full page</a>");
             sb.AppendLine($"<a href='../{r.ApngAsset}' download='{Html.Encode(r.Title)}.apng'>Download APNG</a>");
             sb.AppendLine($"<a href='../{r.PosterAsset}'>Poster frame PNG</a>");
             sb.AppendLine($"<a href='https://github.com/FoxCouncil/NAPLPS/blob/main/Examples/{Uri.EscapeDataString(r.SourceRelative).Replace("%2F", "/")}'>Source file</a>");
