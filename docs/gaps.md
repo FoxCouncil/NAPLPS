@@ -1,6 +1,6 @@
-﻿# Spec Gaps and Deviations 🕳️✨
+# Spec Gaps and Deviations 🕳️✨
 
-Everything our implementation does not match the ANSI X3.110-1983 spec on, organized by whether the deviation is deliberate or outstanding work.
+Everything our implementation does not match the <a href="naplps_standard_-_ansi_x3.110-1983_smaller.pdf" target="_blank" rel="noopener">ANSI X3.110-1983</a> spec on, organized by whether the deviation is deliberate or outstanding work.
 
 ## Deferred (state machinery wired, rendering off by default) 🛠️
 

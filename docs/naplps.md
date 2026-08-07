@@ -1,10 +1,10 @@
-﻿# NAPLPS: Spec Overview 📖✨
+# NAPLPS: Spec Overview 📖✨
 
-A living and working guide to ANSI X3.110-1983. Covers the byte stream, state machine, and command set, plus where our implementation in `NAPLPS/NaplpsFormat.cs` makes specific choices.
+A living and working guide to <a href="naplps_standard_-_ansi_x3.110-1983_smaller.pdf" target="_blank" rel="noopener">ANSI X3.110-1983</a>. Covers the byte stream, state machine, and command set, plus where our implementation in `NAPLPS/NaplpsFormat.cs` makes specific choices.
 
 For the compressed opcode table see [quickref.md](quickref.md). For the Telidraw DSL see [telidraw.md](telidraw.md).
 
-The ANSI X3.110-1983 PDF is bundled in `docs/` in different formats for supplementary reading.
+The <a href="naplps_standard_-_ansi_x3.110-1983_smaller.pdf" target="_blank" rel="noopener">ANSI X3.110-1983</a> PDF is bundled in `docs/` in different formats for supplementary reading.
 
 ## Byte stream 🧬
 

@@ -17,6 +17,10 @@ public static class Home
     private const string RepoBlob = "https://github.com/FoxCouncil/NAPLPS/blob/main/";
     private const string RepoTree = "https://github.com/FoxCouncil/NAPLPS/tree/main/";
 
+    /// <summary>The standard itself. Not published to the site (it is 62 MB), so it points at
+    /// the copy in the repo.</summary>
+    private const string SpecPdf = RepoBlob + "docs/naplps_standard_-_ansi_x3.110-1983_smaller.pdf";
+
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
         .UseAdvancedExtensions()
         .Build();
@@ -47,7 +51,7 @@ public static class Home
         sb.AppendLine("<section class='hero'>");
         sb.AppendLine("<h1>Telidraw</h1>");
         sb.AppendLine("<p class='tagline'>A NAPLPS toolkit and editor for the modern web. Parse, render, author and export "
-                    + "ANSI X3.110-1983 videotex artwork.</p>");
+                    + $"<a href='{SpecPdf}' target='_blank' rel='noopener'>ANSI X3.110-1983</a> videotex artwork.</p>");
         sb.AppendLine("<p class='cta'>");
         sb.AppendLine("<a class='button primary' href='editor/'>Open the editor</a>");
         sb.AppendLine($"<a class='button' href='gallery/index.html'>Browse {renders.Count:N0} renders</a>");
