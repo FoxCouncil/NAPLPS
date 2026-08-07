@@ -119,8 +119,9 @@ sealed class Program
         Console.WriteLine("                        source for decompile); mutually exclusive with -o.");
         Console.WriteLine("                        Reliable on Unix; on Windows the app is a GUI");
         Console.WriteLine("                        subsystem binary so piping stdout is unreliable.");
-        Console.WriteLine("  --force, -f           Overwrite a defaulted output file that exists");
-        Console.WriteLine("                        (an explicit -o always overwrites).");
+        Console.WriteLine("  --force, -f           Decompile only: overwrite a defaulted .td target");
+        Console.WriteLine("                        that exists (an explicit -o always overwrites;");
+        Console.WriteLine("                        compile always overwrites its defaulted .nap).");
         Console.WriteLine();
         Console.WriteLine("Diff Options:");
         Console.WriteLine("  --mode=text|visual    Diff mode (default: text)");
@@ -726,9 +727,11 @@ sealed class Program
         return false;
     }
 
-    /// <summary>A defaulted (not -o) output target must not silently clobber an existing file -
-    /// several Examples .td/.nap are hand-authored. Refuse unless --force; an explicit -o is
-    /// the caller's own choice and overwrites.</summary>
+    /// <summary>Decompile's defaulted (not -o) target must not silently clobber an existing
+    /// .td - several Examples .td are hand-authored source. Refuse unless --force; an explicit
+    /// -o is the caller's own choice and overwrites. Compile is NOT guarded: its defaulted
+    /// .nap is a build artifact, and refusing the second run would break the ordinary
+    /// edit-compile loop.</summary>
     private static bool DefaultTargetWouldClobber(string outputPath, bool force)
     {
         if (!force && System.IO.File.Exists(outputPath))
@@ -756,7 +759,9 @@ sealed class Program
 
         var inputPath = args[1];
 
-        if (!TryParseConvertOptions(args, isCompile: true, out var outputPath, out var bare, out var toStdout, out var systemType, out var force))
+        // force is parsed but unused here: compile's defaulted .nap is a build artifact and
+        // always overwrites; only decompile clobber-guards its defaulted target.
+        if (!TryParseConvertOptions(args, isCompile: true, out var outputPath, out var bare, out var toStdout, out var systemType, out _))
         {
             return 1;
         }
@@ -774,16 +779,9 @@ sealed class Program
             return 1;
         }
 
-        var explicitOutput = outputPath is not null;
         outputPath ??= IOPath.ChangeExtension(inputPath, ".nap");
 
         if (!toStdout && OutputCollidesWithInput(inputPath, outputPath))
-        {
-            return 1;
-        }
-
-        // Only the DEFAULTED target is clobber-guarded; an explicit -o is the caller's choice.
-        if (!toStdout && !explicitOutput && DefaultTargetWouldClobber(outputPath, force))
         {
             return 1;
         }
@@ -850,7 +848,7 @@ sealed class Program
             }
 
             format.Save(outputPath);
-            Console.WriteLine($"Compiled {inputPath} -> {outputPath} ({format.Commands.Count} commands, {new System.IO.FileInfo(outputPath).Length} bytes)");
+            Console.WriteLine($"Compiled {inputPath} \u2192 {outputPath} ({format.Commands.Count} commands, {new System.IO.FileInfo(outputPath).Length} bytes)");
             return 0;
         }
         catch (Exception ex)
@@ -870,7 +868,7 @@ sealed class Program
         if (args.Length < 2)
         {
             Console.Error.WriteLine("Error: NAPLPS input file required.");
-            Console.Error.WriteLine("Usage: Telidraw decompile <file.nap> [-o <output.td>] [--system-type=T] [--stdout]");
+            Console.Error.WriteLine("Usage: Telidraw decompile <file.nap> [-o <output.td>] [--system-type=T] [--stdout] [--force]");
             return 1;
         }
 
@@ -947,7 +945,7 @@ sealed class Program
             }
 
             System.IO.File.WriteAllText(outputPath, source);
-            Console.WriteLine($"Decompiled {inputPath} -> {outputPath} ({format.Commands.Count} commands, {source.Length} chars)");
+            Console.WriteLine($"Decompiled {inputPath} \u2192 {outputPath} ({format.Commands.Count} commands, {source.Length} chars)");
             return 0;
         }
         catch (Exception ex)

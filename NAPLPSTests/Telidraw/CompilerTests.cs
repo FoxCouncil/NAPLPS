@@ -50,13 +50,14 @@ public class CompilerTests
     /// <summary>
     /// An explicit system type must shape the bare encoding state (Compiler.cs ApplySystemDefaults
     /// branch): Telidon's coordinate precision (multi-byte value 4) differs from NAPLPS's (3), so
-    /// the same coordinate-bearing source encodes to DIFFERENT bytes. This is the CLI's
-    /// `compile --system-type=` path, previously reachable but untested.
+    /// the same coordinate-bearing source encodes to DIFFERENT bytes. The raw statement sets
+    /// _emittedRaw, so Compile() also takes the forced FromBytes re-parse with the explicit
+    /// system type. This is the CLI's `compile --system-type=` path, previously untested.
     /// </summary>
     [TestMethod]
     public void CompileBare_ExplicitSystemType_ShapesEncoding()
     {
-        const string src = "move 0.3 0.4\nline 0.7 0.9\n";
+        const string src = "move 0.3 0.4\nline 0.7 0.9\nraw 14\n";
 
         var naplps = CompileBare(src, NaplpsSystemType.NAPLPS);
         var telidon = CompileBare(src, NaplpsSystemType.Telidon);
