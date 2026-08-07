@@ -7,7 +7,16 @@ using NAPLPSSite;
 // naplps-site --repo <root> --out <dir> [--base-url <url>] [--history 5]
 var repo = ArgOr(args, "--repo", Directory.GetCurrentDirectory());
 var outDir = ArgOr(args, "--out", Path.Combine(repo, "_site"));
-var baseUrl = ArgOr(args, "--base-url", "https://foxcouncil.github.io/NAPLPS");
+var baseUrl = ArgOr(args, "--base-url", "https://telidraw.com");
+
+// Pages serves every site over TLS, but configure-pages reports http:// whenever it cannot see
+// enforcement turned on, and it is the build's job not to bake that into 382 canonicals. An http
+// canonical published once is an http canonical indexed, so the scheme is forced here rather than
+// inherited.
+if (baseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+{
+    baseUrl = string.Concat("https://", baseUrl.AsSpan("http://".Length));
+}
 var history = int.Parse(ArgOr(args, "--history", "5"));
 
 var baselinesDir = Path.Combine(repo, "NAPLPSTests", "Visual", "Baselines");
