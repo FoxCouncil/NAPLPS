@@ -15,6 +15,8 @@ public static class Html
 {
     public const string SiteName = "Telidraw — Visual Corpus";
 
+    public const string Repo = "https://github.com/FoxCouncil/NAPLPS";
+
     public static string Encode(string s) => System.Net.WebUtility.HtmlEncode(s);
 
     private static string Json(object o) => JsonSerializer.Serialize(o, JsonOpts);
@@ -79,8 +81,9 @@ public static class Html
         sb.AppendLine("</head>");
         sb.AppendLine("<body>");
         sb.AppendLine("<header class='site'>");
-        sb.AppendLine($"<a class='brand' href='{up}index.html'>NAPLPS <span>Visual Corpus</span></a>");
-        sb.AppendLine($"<nav><a href='{up}index.html'>Gallery</a><a href='{up}changes/index.html'>Changes</a><a href='{up}editor/'>Editor</a><a href='https://github.com/FoxCouncil/NAPLPS'>Source</a></nav>");
+        sb.AppendLine($"<a class='brand' href='{up}index.html'>Telidraw <span>NAPLPS toolkit</span></a>");
+        sb.AppendLine($"<nav><a href='{up}gallery/index.html'>Gallery</a><a href='{up}changes/index.html'>Changes</a><a href='{up}editor/'>Editor</a>"
+                    + $"<a href='{Repo}/releases'>Releases</a><a href='{Repo}/issues'>Issues</a><a href='{Repo}'>Repo</a></nav>");
         sb.AppendLine("</header>");
         sb.AppendLine("<main>");
 

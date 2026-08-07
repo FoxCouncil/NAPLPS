@@ -193,6 +193,7 @@ foreach (var commit in git.CommitsTouching(BaselinesRepoPath, history))
 
 Pages.WriteStyle(outDir);
 Pages.WritePlayer(outDir);
+Home.Write(outDir, baseUrl, repo, renders, builtSha, builtAt);
 Pages.WriteGallery(outDir, baseUrl, renders, commits, builtSha, builtAt);
 Pages.WriteRenderPages(outDir, baseUrl, renders, builtSha, builtAt);
 Pages.WriteChangeIndex(outDir, baseUrl, commits, builtSha, builtAt);

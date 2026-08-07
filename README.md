@@ -2,7 +2,7 @@
 
 A modern .NET 10 toolkit for the **North American Presentation Level Protocol Syntax**, ANSI X3.110-1983 — with live-rendering examples from the historical corpus. Click any tile below to open the full-size APNG; each is a bit-identical render from a real `.nap` file in `Examples/`.
 
-### 🖼️ [**Browse the full visual corpus →**](https://foxcouncil.github.io/NAPLPS/)
+### 🖼️ [**Browse the full visual corpus →**](https://telidraw.com/gallery/)
 
 All 372 renders in one gallery, with transport controls to scrub through the drawing sequence frame by frame, and before/after diffs for every recent change to the renderer. For background on the format, Prodigy, and Telidon, see the Wikipedia articles: [NAPLPS](https://en.wikipedia.org/wiki/NAPLPS), [Prodigy (online service)](https://en.wikipedia.org/wiki/Prodigy_(online_service)), [Telidon](https://en.wikipedia.org/wiki/Telidon). ⚠️WARNING:⚠️ These are various amazing rabbit holes, be warned! 🐇🕳️
 
@@ -62,7 +62,7 @@ Toggle **View > Toolbox** to enter authoring mode. Toggle **View > Properties** 
 | Doc | What's in it |
 |---|---|
 | [README.md](README.md) | You are here. Cliff notes and pointers. |
-| [Visual corpus](https://foxcouncil.github.io/NAPLPS/) | 🖼️ Every render in the corpus, frame-by-frame playback, and the change history of the renderer |
+| [Visual corpus](https://telidraw.com/gallery/) | 🖼️ Every render in the corpus, frame-by-frame playback, and the change history of the renderer |
 | [docs/app.md](docs/app.md) | 🖥️ The editor: tools, panels, menus, keyboard shortcuts, CLI commands, export formats, network mode, macro recorder, DRCS / Texture designers |
 | [docs/naplps.md](docs/naplps.md) | 📖 The spec: byte-stream layout, G-set invocation, ESC sequences, PDI command family, coordinate encoding, text / color / texture semantics, mosaic + DRCS, plus how the parser implements the state machine |
 | [docs/telidraw.md](docs/telidraw.md) | ✍️ The DSL: keyword reference, directives, block structure, expression grammar, round-trip guarantees |

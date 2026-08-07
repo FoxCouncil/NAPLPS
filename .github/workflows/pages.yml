@@ -20,6 +20,8 @@ on:
       - 'Telidraw/**'
       - 'Telidraw.Browser/**'
       - 'NAPLPS/**'
+      # The landing page is README.md rendered, so editing it republishes the site.
+      - 'README.md'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
     inputs:

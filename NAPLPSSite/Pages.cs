@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
+// Copyright (c) 2026 FoxCouncil & Contributors - https://github.com/FoxCouncil/NAPLPS
 
 using System.Text;
 
@@ -18,6 +18,9 @@ public static class Pages
         File.WriteAllText(full, text, new UTF8Encoding(false));
     }
 
+    /// <summary>Public door onto the writer, for pages generated outside this class.</summary>
+    public static void WriteFile(string root, string relative, string content) => Write(root, relative, content);
+
     public static void WriteGallery(string root, string baseUrl, List<RenderInfo> renders, List<CommitInfo> commits, string sha, DateTimeOffset at)
     {
         var totalFrames = renders.Sum(r => (long)r.FrameCount);
@@ -25,10 +28,10 @@ public static class Pages
         var description = $"Every one of the {renders.Count:N0} NAPLPS artworks Telidraw renders, "
                         + $"{totalFrames:N0} frames in total, kept as byte-exact visual baselines so any change to the renderer is visible.";
 
-        var ld = Html.BreadcrumbLd(baseUrl, ("Gallery", "index.html"));
+        var ld = Html.BreadcrumbLd(baseUrl, ("Home", "index.html"), ("Gallery", "gallery/index.html"));
 
         var sb = new StringBuilder();
-        sb.Append(Html.Head(Html.SiteName, description, "index.html", baseUrl, renders.FirstOrDefault()?.PosterAsset, 0, ld,
+        sb.Append(Html.Head(Html.SiteName, description, "gallery/index.html", baseUrl, renders.FirstOrDefault()?.PosterAsset, 1, ld,
             "NAPLPS, Telidon, Prodigy, videotex, ANSI X3.110, retrocomputing, vector graphics"));
 
         sb.AppendLine("<h1>NAPLPS Visual Corpus</h1>");
@@ -41,7 +44,7 @@ public static class Pages
 
         if (commits.Count > 0)
         {
-            sb.AppendLine($"<span><a href='changes/index.html'><b>{commits.Count}</b> recent changes</a></span>");
+            sb.AppendLine($"<span><a href='../changes/index.html'><b>{commits.Count}</b> recent changes</a></span>");
         }
 
         sb.AppendLine("</div>");
@@ -55,10 +58,10 @@ public static class Pages
 
             foreach (var r in group.OrderBy(r => r.Title, StringComparer.OrdinalIgnoreCase))
             {
-                sb.AppendLine($"<a class='card' href='r/{r.Slug}.html' data-name='{Html.Encode((r.Title + " " + r.Collection).ToLowerInvariant())}' data-apng='{r.ApngAsset}'>");
+                sb.AppendLine($"<a class='card' href='../r/{r.Slug}.html' data-name='{Html.Encode((r.Title + " " + r.Collection).ToLowerInvariant())}' data-apng='../{r.ApngAsset}'>");
                 // Stills by default - 372 animated APNGs loading at once would be brutal. The full
                 // render is swapped in on hover, so the animation is paid for only when wanted.
-                sb.AppendLine($"<img src='{r.ThumbAsset}' width='320' height='240' loading='lazy' decoding='async' alt='{Html.Encode(r.Title)} rendered'>");
+                sb.AppendLine($"<img src='../{r.ThumbAsset}' width='320' height='240' loading='lazy' decoding='async' alt='{Html.Encode(r.Title)} rendered'>");
                 sb.AppendLine($"<span class='name'>{Html.Encode(r.Title)}</span>");
                 sb.AppendLine($"<span class='meta'>{r.FrameCount:N0} frames &middot; {Html.Encode(r.SystemType)}</span>");
                 sb.AppendLine("</a>");
@@ -116,7 +119,7 @@ public static class Pages
             """);
 
         sb.Append(Html.Foot(sha, at));
-        Write(root, "index.html", sb.ToString());
+        Write(root, "gallery/index.html", sb.ToString());
     }
 
     public static void WriteRenderPages(string root, string baseUrl, List<RenderInfo> renders, string sha, DateTimeOffset at)
@@ -132,7 +135,7 @@ public static class Pages
                 $"{r.Title}, {r.Collection}, {r.SystemType}, NAPLPS, videotex, retrocomputing"));
 
             sb.AppendLine($"<!-- *licks* {Html.Encode(r.Title)}, YUM! -->");
-            sb.AppendLine($"<nav class='crumb'><a href='../index.html'>Gallery</a> / <span>{Html.Encode(r.Collection)}</span> / <span>{Html.Encode(r.Title)}</span></nav>");
+            sb.AppendLine($"<nav class='crumb'><a href='../gallery/index.html'>Gallery</a> / <span>{Html.Encode(r.Collection)}</span> / <span>{Html.Encode(r.Title)}</span></nav>");
             sb.AppendLine($"<h1>{Html.Encode(r.Title)}</h1>");
             sb.AppendLine($"<p class='lede'>{Html.Encode(description)}</p>");
 
@@ -203,13 +206,13 @@ public static class Pages
             ? "No recent baseline changes."
             : $"The last {commits.Count} commits that changed how the renderer draws, with before and after for every affected artwork.";
 
-        var ld = Html.BreadcrumbLd(baseUrl, ("Gallery", "index.html"), ("Changes", "changes/index.html"));
+        var ld = Html.BreadcrumbLd(baseUrl, ("Home", "index.html"), ("Gallery", "gallery/index.html"), ("Changes", "changes/index.html"));
 
         var sb = new StringBuilder();
         sb.Append(Html.Head($"Recent changes — {Html.SiteName}", description, "changes/index.html", baseUrl, null, 1, ld,
             "NAPLPS renderer changes, visual regression, before and after"));
 
-        sb.AppendLine("<nav class='crumb'><a href='../index.html'>Gallery</a> / <span>Changes</span></nav>");
+        sb.AppendLine("<nav class='crumb'><a href='../gallery/index.html'>Gallery</a> / <span>Changes</span></nav>");
         sb.AppendLine("<h1>Recent baseline changes</h1>");
         sb.AppendLine($"<p class='lede'>{Html.Encode(description)}</p>");
 
@@ -236,13 +239,13 @@ public static class Pages
         {
             var canonical = $"changes/{c.Slug}.html";
             var description = $"{c.Commit.Subject} — {c.Changes.Count:N0} artworks changed, {c.TotalDiffPixels:N0} pixels different, committed {c.Commit.Date:yyyy-MM-dd}.";
-            var ld = Html.BreadcrumbLd(baseUrl, ("Gallery", "index.html"), ("Changes", "changes/index.html"), (c.Commit.ShortSha, canonical));
+            var ld = Html.BreadcrumbLd(baseUrl, ("Home", "index.html"), ("Gallery", "gallery/index.html"), ("Changes", "changes/index.html"), (c.Commit.ShortSha, canonical));
 
             var sb = new StringBuilder();
             sb.Append(Html.Head($"{c.Commit.Subject} — {Html.SiteName}", description, canonical, baseUrl,
                 c.Changes.FirstOrDefault()?.DiffAsset, 1, ld, "NAPLPS, visual diff, renderer change"));
 
-            sb.AppendLine("<nav class='crumb'><a href='../index.html'>Gallery</a> / <a href='index.html'>Changes</a> / <span>" + Html.Encode(c.Commit.ShortSha) + "</span></nav>");
+            sb.AppendLine("<nav class='crumb'><a href='../gallery/index.html'>Gallery</a> / <a href='index.html'>Changes</a> / <span>" + Html.Encode(c.Commit.ShortSha) + "</span></nav>");
             sb.AppendLine($"<h1>{Html.Encode(c.Commit.Subject)}</h1>");
             sb.AppendLine($"<p class='lede'><code>{Html.Encode(c.Commit.Sha)}</code><br>{Html.Encode(c.Commit.Author)} &middot; <time datetime='{c.Commit.Date:O}'>{c.Commit.Date:yyyy-MM-dd HH:mm}</time> &middot; {c.Changes.Count:N0} artwork(s)</p>");
             sb.AppendLine($"<p class='links'><a href='https://github.com/FoxCouncil/NAPLPS/commit/{Html.Encode(c.Commit.Sha)}'>View commit on GitHub</a></p>");
@@ -313,6 +316,7 @@ public static class Pages
         sb.AppendLine("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\" xmlns:image=\"http://www.google.com/schemas/sitemap-image/1.1\">");
 
         sb.AppendLine($"<url><loc>{b}/index.html</loc><lastmod>{today}</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>");
+        sb.AppendLine($"<url><loc>{b}/gallery/index.html</loc><lastmod>{today}</lastmod><changefreq>weekly</changefreq><priority>0.9</priority></url>");
         sb.AppendLine($"<url><loc>{b}/changes/index.html</loc><lastmod>{today}</lastmod><changefreq>weekly</changefreq><priority>0.8</priority></url>");
 
         foreach (var r in renders)
@@ -432,6 +436,32 @@ public static class Pages
             .pair img { width: 100%; height: auto; border: 1px solid #30363d; border-radius: 6px; background: #000; image-rendering: pixelated; }
             footer.site { border-top: 1px solid #30363d; padding: 18px 24px; color: #8b949e; font-size: 13px; }
             code { font-family: 'Cascadia Code', ui-monospace, monospace; font-size: .92em; }
+            .hero { padding: 46px 0 34px; border-bottom: 1px solid #21262d; margin-bottom: 30px; }
+            .hero h1 { font-size: 46px; letter-spacing: -.02em; margin: 0 0 12px; }
+            .hero .tagline { color: #8b949e; font-size: 18px; max-width: 62ch; margin: 0 0 24px; }
+            .hero .cta { display: flex; gap: 12px; flex-wrap: wrap; margin: 0; }
+            .button { display: inline-block; padding: 10px 20px; border: 1px solid #30363d; border-radius: 8px; background: #161b22; color: #c9d1d9; font-weight: 600; }
+            .button:hover { border-color: #58a6ff; text-decoration: none; }
+            .button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+            .button.primary:hover { background: #388bfd; border-color: #388bfd; }
+            /* README.md rendered verbatim, so this styles whatever GitHub-flavoured markup it holds. */
+            .readme { max-width: 90ch; }
+            .readme h1 { font-size: 30px; margin: 34px 0 12px; }
+            .readme h2 { font-size: 21px; }
+            .readme h3 { color: #f0f6fc; font-size: 17px; margin: 26px 0 10px; }
+            .readme p, .readme li { color: #c9d1d9; }
+            .readme ul, .readme ol { padding-left: 22px; }
+            .readme li { margin: 5px 0; }
+            .readme table { border-collapse: collapse; margin: 16px 0; }
+            .readme th, .readme td { border: 1px solid #30363d; padding: 7px 13px; text-align: left; vertical-align: top; }
+            .readme th { background: #161b22; color: #f0f6fc; }
+            .readme table table, .readme table table th, .readme table table td { border: none; background: none; padding: 4px; }
+            .readme img { max-width: 100%; height: auto; border-radius: 6px; background: #000; image-rendering: pixelated; }
+            .readme pre { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px 16px; overflow-x: auto; }
+            .readme pre code { background: none; padding: 0; font-size: 13px; }
+            .readme :not(pre) > code { background: #161b22; border: 1px solid #30363d; border-radius: 5px; padding: 1px 5px; }
+            .readme blockquote { margin: 14px 0; padding: 2px 16px; border-left: 3px solid #30363d; color: #8b949e; }
+            .readme hr { border: none; border-top: 1px solid #21262d; margin: 28px 0; }
             """);
     }
 }
