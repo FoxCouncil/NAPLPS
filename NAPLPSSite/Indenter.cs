@@ -49,6 +49,10 @@ public static partial class Indenter
                     rawBlock.Clear();
                     rawTag = null;
                     sb.Append('\t', rawDepth).Append(line.TrimStart()).Append('\n');
+                    // Opening the block pushed a level for its contents; closing it takes that
+                    // level back. Without this every script, style or pre block shifts the whole
+                    // rest of the document one tab deeper.
+                    depth = rawDepth;
                 }
                 else
                 {

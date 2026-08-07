@@ -99,7 +99,8 @@ public static class Html
                     + "Artwork belongs to its original authors.</p>");
         sb.AppendLine("</footer>");
         sb.AppendLine("<!-- Yip, Fox loves you! -->");
-        sb.AppendLine("</body></html>");
+        sb.AppendLine("</body>");
+        sb.AppendLine("</html>");
 
         return sb.ToString();
     }
