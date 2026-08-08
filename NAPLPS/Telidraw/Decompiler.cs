@@ -12,9 +12,10 @@ namespace NAPLPS.Telidraw;
 /// is a linear sequence of command calls that, when fed back through the <see cref="Compiler"/>,
 /// produces byte-identical NAPLPS output.
 ///
-/// The <see cref="NaplpsFormat.New"/> header (CAN + NSR sentinels) is recognized and skipped
-/// because the compiler re-emits it automatically. This makes decompile→compile→decompile
-/// stable for any compiler-produced file.
+/// The output is the COMPLETE byte specification: parsed CAN/NSR sentinels are emitted as
+/// statements like any other command, so recompiling byte-exact requires the compiler's
+/// BareFormat mode (the CLI's --bare). A default (non-bare) recompile prepends a fresh
+/// CAN+NSR header on top of the emitted ones.
 /// </summary>
 public static class Decompiler
 {
@@ -94,10 +95,12 @@ public static class Decompiler
         return sb.ToString();
     }
 
-    /// <summary>Decompile a .nap file on disk to a Telidraw source string.</summary>
-    public static string DecompileFile(string napFilePath)
+    /// <summary>Decompile a .nap file on disk to a Telidraw source string. An explicit
+    /// <paramref name="forcedSystemType"/> overrides header auto-detection, matching
+    /// <see cref="NaplpsFormat.FromFile"/>.</summary>
+    public static string DecompileFile(string napFilePath, NaplpsSystemType? forcedSystemType = null)
     {
-        var format = NaplpsFormat.FromFile(napFilePath);
+        var format = NaplpsFormat.FromFile(napFilePath, forcedSystemType);
         return Decompile(format);
     }
 

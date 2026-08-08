@@ -47,6 +47,11 @@ sealed class Program
                 return HandleCompileCommand(args);
             }
 
+            if (command == "decompile" || command == "--decompile")
+            {
+                return HandleDecompileCommand(args);
+            }
+
             if (command == "help" || command == "--help" || command == "-h" || command == "-?")
             {
                 PrintHelp();
@@ -76,12 +81,14 @@ sealed class Program
         Console.WriteLine("  export --batch <dir> [options]          Batch export all .nap files");
         Console.WriteLine("  diff <file1> <file2> [options]          Compare two NAPLPS files");
         Console.WriteLine("  compile <file.td> [-o output.nap]       Compile Telidraw source to NAPLPS");
+        Console.WriteLine("  decompile <file.nap> [-o output.td]     Decompile NAPLPS to Telidraw source");
         Console.WriteLine();
         Console.WriteLine("Export Options:");
         Console.WriteLine("  --format=png|gif|apng Output format (default: png)");
         Console.WriteLine("  --size=WxH            Canvas size (default: 1024x768)");
         Console.WriteLine("  --at=FRAMES           Export specific frames (e.g. 1,2-5,500,1200)");
-        Console.WriteLine("  --stdout, -           Output to stdout instead of file");
+        Console.WriteLine("  --stdout, -           Output to stdout instead of file (Unix-reliable; on");
+        Console.WriteLine("                        Windows the GUI-subsystem binary pipes unreliably)");
         Console.WriteLine();
         Console.WriteLine("Batch Export Options:");
         Console.WriteLine("  --batch               Enable batch mode (input is a directory)");
@@ -100,6 +107,22 @@ sealed class Program
         Console.WriteLine("  --palette-anim        Export blink/palette animation as GIF");
         Console.WriteLine("  --frames=N            Number of animation frames (default: 120)");
         Console.WriteLine();
+        Console.WriteLine("Compile/Decompile Options:");
+        Console.WriteLine("  --system-type=T       Force naplps|prodigy|telidon. On compile it sets the");
+        Console.WriteLine("                        target system (default naplps). On decompile it forces");
+        Console.WriteLine("                        how an ambiguous stream is decoded (default auto-detect);");
+        Console.WriteLine("                        it rarely changes output for auto-detectable files.");
+        Console.WriteLine("  --bare                Compile the .td as the complete byte specification");
+        Console.WriteLine("                        (no CAN+NSR sentinels). Decompiler output expects");
+        Console.WriteLine("                        this; it makes nap -> td -> nap byte-exact.");
+        Console.WriteLine("  --stdout              Write the result to stdout (bytes for compile,");
+        Console.WriteLine("                        source for decompile); mutually exclusive with -o.");
+        Console.WriteLine("                        Reliable on Unix; on Windows the app is a GUI");
+        Console.WriteLine("                        subsystem binary so piping stdout is unreliable.");
+        Console.WriteLine("  --force, -f           Decompile only: overwrite a defaulted .td target");
+        Console.WriteLine("                        that exists (an explicit -o always overwrites;");
+        Console.WriteLine("                        compile always overwrites its defaulted .nap).");
+        Console.WriteLine();
         Console.WriteLine("Diff Options:");
         Console.WriteLine("  --mode=text|visual    Diff mode (default: text)");
         Console.WriteLine("  --size=WxH            Canvas size for visual diff (default: 1024x768)");
@@ -115,6 +138,9 @@ sealed class Program
         Console.WriteLine("  Telidraw export --batch Examples/ --format=png");
         Console.WriteLine("  Telidraw export --batch Examples/ --output-dir=output/ --format=gif");
         Console.WriteLine("  Telidraw export building.nap --palette-anim --loop --frames=300 anim.gif");
+        Console.WriteLine("  Telidraw compile drawing.td -o drawing.nap");
+        Console.WriteLine("  Telidraw decompile picture.nap             # writes picture.td");
+        Console.WriteLine("  Telidraw decompile picture.nap --stdout | less");
         Console.WriteLine("  Telidraw diff file1.nap file2.nap");
         Console.WriteLine("  Telidraw diff file1.nap file2.nap --mode=visual --output=diff.png");
     }
@@ -575,30 +601,27 @@ sealed class Program
     }
 
     /// <summary>
-    /// Compile a Telidraw source file (.td) to a NAPLPS binary (.nap).
-    /// Usage: Telidraw compile input.td [-o output.nap]
-    /// When -o is omitted, output goes to input.nap next to the source.
+    /// Shared option parsing for compile/decompile. Rejects unknown arguments outright -
+    /// a silently ignored flag (a typo, --bare on the wrong command, a space where '='
+    /// belongs) otherwise produces wrong bytes with a green exit code.
     /// </summary>
-    private static int HandleCompileCommand(string[] args)
+    private static bool TryParseConvertOptions(string[] args, bool isCompile, out string? outputPath,
+        out bool bare, out bool toStdout, out NaplpsSystemType? systemType, out bool force)
     {
-        if (args.Length < 2)
-        {
-            Console.Error.WriteLine("Error: Telidraw source file required.");
-            Console.Error.WriteLine("Usage: Telidraw compile <file.td> [-o <output.nap>]");
-            return 1;
-        }
-
-        var inputPath = args[1];
-        string? outputPath = null;
+        outputPath = null;
+        bare = false;
+        toStdout = false;
+        systemType = null;
+        force = false;
 
         for (int i = 2; i < args.Length; i++)
         {
             if (args[i] == "-o" || args[i] == "--output")
             {
-                if (i + 1 >= args.Length)
+                if (i + 1 >= args.Length || args[i + 1].StartsWith('-'))
                 {
                     Console.Error.WriteLine("Error: -o requires a path argument.");
-                    return 1;
+                    return false;
                 }
                 outputPath = args[++i];
             }
@@ -610,6 +633,137 @@ sealed class Program
             {
                 outputPath = args[i]["-o=".Length..];
             }
+            else if (args[i] == "--stdout" || args[i] == "-")
+            {
+                toStdout = true;
+            }
+            else if (args[i] == "--force" || args[i] == "-f")
+            {
+                force = true;
+            }
+            else if (args[i] == "--bare" && isCompile)
+            {
+                bare = true;
+            }
+            else if (args[i].StartsWith("--system-type="))
+            {
+                if (!TryParseSystemType(args[i]["--system-type=".Length..], out var st))
+                {
+                    return false;
+                }
+                systemType = st;
+            }
+            else if (args[i].StartsWith('-'))
+            {
+                Console.Error.WriteLine($"Error: unknown option '{args[i]}' for {(isCompile ? "compile" : "decompile")}.");
+                return false;
+            }
+            else
+            {
+                Console.Error.WriteLine($"Error: unexpected argument '{args[i]}'; the input file must come before options.");
+                return false;
+            }
+        }
+
+        // An empty -o / --output= value (e.g. `--output=`) would otherwise reach GetFullPath
+        // and throw an unhandled ArgumentException; reject it like any other bad argument.
+        if (outputPath is not null && outputPath.Length == 0)
+        {
+            Console.Error.WriteLine("Error: -o/--output requires a non-empty path.");
+            return false;
+        }
+
+        if (toStdout && outputPath != null)
+        {
+            Console.Error.WriteLine("Error: --stdout and -o are mutually exclusive.");
+            return false;
+        }
+
+        return true;
+    }
+
+    // Full-path comparison honoring the filesystem: case-insensitive only on Windows, where
+    // paths are; ordinal elsewhere, so `Foo.td` and `foo.td` are distinct on Linux.
+    private static readonly StringComparison PathComparison =
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    /// <summary>Resolves symlinks so an aliased path to the input (e.g. an -o that points at
+    /// the same file through a link) is recognized. GetFullPath alone normalizes ./.. but not
+    /// links; this resolves the file and its directory. (An ancestor-directory symlink the
+    /// leaf doesn't expose is not chased - a portable realpath is not in the BCL.)</summary>
+    private static string RealPath(string path)
+    {
+        var full = IOPath.GetFullPath(path);
+        try
+        {
+            var fi = new System.IO.FileInfo(full);
+            var target = fi.ResolveLinkTarget(returnFinalTarget: true);
+            if (target is not null) { return target.FullName; }
+
+            var dir = fi.DirectoryName;
+            if (dir is not null)
+            {
+                var dirReal = new System.IO.DirectoryInfo(dir).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? dir;
+                return IOPath.Combine(dirReal, fi.Name);
+            }
+        }
+        catch
+        {
+            // Fall through to the normalized-but-unresolved path.
+        }
+
+        return full;
+    }
+
+    /// <summary>The output path must never silently overwrite the input, including via a symlink.</summary>
+    private static bool OutputCollidesWithInput(string inputPath, string outputPath)
+    {
+        if (string.Equals(RealPath(inputPath), RealPath(outputPath), PathComparison))
+        {
+            Console.Error.WriteLine($"Error: output path {outputPath} is the input file; pass -o to choose another.");
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Decompile's defaulted (not -o) target must not silently clobber an existing
+    /// .td - several Examples .td are hand-authored source. Refuse unless --force; an explicit
+    /// -o is the caller's own choice and overwrites. Compile is NOT guarded: its defaulted
+    /// .nap is a build artifact, and refusing the second run would break the ordinary
+    /// edit-compile loop.</summary>
+    private static bool DefaultTargetWouldClobber(string outputPath, bool force)
+    {
+        if (!force && System.IO.File.Exists(outputPath))
+        {
+            Console.Error.WriteLine($"Error: {outputPath} already exists; pass -o to a different path or --force to overwrite.");
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Compile a Telidraw source file (.td) to a NAPLPS binary (.nap).
+    /// Usage: Telidraw compile input.td [-o output.nap]
+    /// When -o is omitted, output goes to input.nap next to the source.
+    /// </summary>
+    private static int HandleCompileCommand(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("Error: Telidraw source file required.");
+            Console.Error.WriteLine("Usage: Telidraw compile <file.td> [-o <output.nap>] [--bare] [--system-type=T] [--stdout]");
+            return 1;
+        }
+
+        var inputPath = args[1];
+
+        // force is parsed but unused here: compile's defaulted .nap is a build artifact and
+        // always overwrites; only decompile clobber-guards its defaulted target.
+        if (!TryParseConvertOptions(args, isCompile: true, out var outputPath, out var bare, out var toStdout, out var systemType, out _))
+        {
+            return 1;
         }
 
         if (!System.IO.File.Exists(inputPath))
@@ -618,21 +772,46 @@ sealed class Program
             return 1;
         }
 
+        // Wrong-direction guard: a .nap input is a NAPLPS stream, not Telidraw source.
+        if (inputPath.EndsWith(".nap", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine($"Error: {inputPath} looks like a NAPLPS stream (.nap); use 'decompile' to make a .td.");
+            return 1;
+        }
+
         outputPath ??= IOPath.ChangeExtension(inputPath, ".nap");
+
+        if (!toStdout && OutputCollidesWithInput(inputPath, outputPath))
+        {
+            return 1;
+        }
 
         try
         {
             var source = System.IO.File.ReadAllText(inputPath);
-            var tokens = new NAPLPS.Telidraw.Lexer(source).Tokenize();
+
+            // A decompiled source is the COMPLETE byte specification; recompiling it
+            // without --bare doubles the CAN+NSR header the compiler prepends.
+            if (!bare && source.StartsWith("// Decompiled from .nap"))
+            {
+                Console.Error.WriteLine("warning: this source was produced by the decompiler; compile with --bare to reproduce the original bytes (without it a fresh CAN+NSR header is prepended).");
+            }
+
             var lexer = new NAPLPS.Telidraw.Lexer(source);
-            var relexed = lexer.Tokenize();
+            var tokens = lexer.Tokenize();
 
             foreach (var diag in lexer.Diagnostics)
             {
                 Console.Error.WriteLine($"lex: {diag}");
             }
 
-            var parser = new NAPLPS.Telidraw.Parser(relexed);
+            if (lexer.Diagnostics.Count > 0)
+            {
+                Console.Error.WriteLine($"Aborting compile due to {lexer.Diagnostics.Count} lex error(s).");
+                return 1;
+            }
+
+            var parser = new NAPLPS.Telidraw.Parser(tokens);
             var program = parser.Parse();
 
             foreach (var diag in parser.Diagnostics)
@@ -646,7 +825,7 @@ sealed class Program
                 return 1;
             }
 
-            var compiler = new NAPLPS.Telidraw.Compiler(program);
+            var compiler = new NAPLPS.Telidraw.Compiler(program, systemType) { BareFormat = bare };
             var format = compiler.Compile();
 
             foreach (var diag in compiler.Diagnostics)
@@ -660,6 +839,14 @@ sealed class Program
                 return 1;
             }
 
+            if (toStdout)
+            {
+                using var stdout = Console.OpenStandardOutput();
+                var bytes = format.ToBytes();
+                stdout.Write(bytes, 0, bytes.Length);
+                return 0;
+            }
+
             format.Save(outputPath);
             Console.WriteLine($"Compiled {inputPath} \u2192 {outputPath} ({format.Commands.Count} commands, {new System.IO.FileInfo(outputPath).Length} bytes)");
             return 0;
@@ -668,6 +855,117 @@ sealed class Program
         {
             Console.Error.WriteLine($"Error: {ex.Message}");
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// Decompile a NAPLPS byte stream into Telidraw source: the inverse door to the same
+    /// engine `compile` fronts. `--bare` compiles of the output reproduce the input bytes
+    /// exactly (the corpus round-trip invariant).
+    /// </summary>
+    private static int HandleDecompileCommand(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("Error: NAPLPS input file required.");
+            Console.Error.WriteLine("Usage: Telidraw decompile <file.nap> [-o <output.td>] [--system-type=T] [--stdout] [--force]");
+            return 1;
+        }
+
+        var inputPath = args[1];
+
+        if (!TryParseConvertOptions(args, isCompile: false, out var outputPath, out _, out var toStdout, out var forcedType, out var force))
+        {
+            return 1;
+        }
+
+        var explicitOutput = outputPath is not null;
+
+        if (!System.IO.File.Exists(inputPath))
+        {
+            Console.Error.WriteLine($"Error: Input file not found: {inputPath}");
+            return 1;
+        }
+
+        // Wrong-direction guard: a .td input is Telidraw source, not a NAPLPS stream.
+        // NAPLPS is a permissive byte format - source text decodes to a "valid" run of
+        // text-drawing commands - so this is caught by extension, not by the decode.
+        if (inputPath.EndsWith(".td", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine($"Error: {inputPath} looks like Telidraw source (.td); use 'compile' to make a .nap.");
+            return 1;
+        }
+
+        try
+        {
+            var format = NaplpsFormat.FromFile(inputPath, forcedType);
+
+            // Hard parse errors (an opcode absent from the in-use table, a truncated
+            // definition) mean the stream is not recoverable - abort. NAPLPS decodes
+            // almost any bytes to SOME command stream, though, so a clean decode is not
+            // proof the input was really NAPLPS; warnings mean the .td is a lossy,
+            // best-effort reconstruction and that is reported, not silently ignored.
+            foreach (var err in format.Errors.Where(e => e.Severity == NaplpsErrorSeverity.Error))
+            {
+                Console.Error.WriteLine($"error: {err}");
+            }
+
+            if (format.IsErrored)
+            {
+                Console.Error.WriteLine($"Aborting decompile: {format.Errors.Count(e => e.Severity == NaplpsErrorSeverity.Error)} unrecoverable parse error(s); the output would be incomplete.");
+                return 1;
+            }
+
+            var warnings = format.Errors.Count(e => e.Severity == NaplpsErrorSeverity.Warning);
+            if (warnings > 0)
+            {
+                Console.Error.WriteLine($"warning: {warnings} decode warning(s); the .td is a best-effort reconstruction of this stream.");
+            }
+
+            var source = NAPLPS.Telidraw.Decompiler.Decompile(format);
+
+            if (toStdout)
+            {
+                Console.Out.Write(source);
+                return 0;
+            }
+
+            outputPath ??= IOPath.ChangeExtension(inputPath, ".td");
+
+            if (OutputCollidesWithInput(inputPath, outputPath))
+            {
+                return 1;
+            }
+
+            // A defaulted target (foo.nap -> foo.td) must not silently clobber a hand-authored
+            // .td; several Examples pairs are exactly that. An explicit -o is the caller's choice.
+            if (!explicitOutput && DefaultTargetWouldClobber(outputPath, force))
+            {
+                return 1;
+            }
+
+            System.IO.File.WriteAllText(outputPath, source);
+            Console.WriteLine($"Decompiled {inputPath} \u2192 {outputPath} ({format.Commands.Count} commands, {source.Length} chars)");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            return 1;
+        }
+    }
+
+    private static bool TryParseSystemType(string value, out NaplpsSystemType systemType)
+    {
+        switch (value.ToLowerInvariant())
+        {
+            case "naplps": systemType = NaplpsSystemType.NAPLPS; return true;
+            case "prodigy": systemType = NaplpsSystemType.Prodigy; return true;
+            case "telidon": systemType = NaplpsSystemType.Telidon; return true;
+            default:
+                Console.Error.WriteLine($"Error: unknown system type '{value}' (naplps|prodigy|telidon).");
+                systemType = NaplpsSystemType.NAPLPS;
+                return false;
         }
     }
 

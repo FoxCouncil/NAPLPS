@@ -36,6 +36,38 @@ public class CompilerTests
         return format.ToBytes();
     }
 
+    /// <summary>Compiles bare with an explicit system type - the only path that reaches
+    /// the Compiler's ApplySystemDefaults branch and the forced re-parse.</summary>
+    private static byte[] CompileBare(string src, NaplpsSystemType? systemType)
+    {
+        var program = new Parser(new Lexer(src).Tokenize()).Parse();
+        var compiler = new Compiler(program, systemType) { BareFormat = true };
+        var format = compiler.Compile();
+        Assert.AreEqual(0, compiler.Diagnostics.Count, string.Join("; ", compiler.Diagnostics));
+        return format.ToBytes();
+    }
+
+    /// <summary>
+    /// An explicit system type must shape the bare encoding state (Compiler.cs ApplySystemDefaults
+    /// branch): Telidon's coordinate precision (multi-byte value 4) differs from NAPLPS's (3), so
+    /// the same coordinate-bearing source encodes to DIFFERENT bytes. The raw statement sets
+    /// _emittedRaw, so Compile() also takes the forced FromBytes re-parse with the explicit
+    /// system type. This is the CLI's `compile --system-type=` path, previously untested.
+    /// </summary>
+    [TestMethod]
+    public void CompileBare_ExplicitSystemType_ShapesEncoding()
+    {
+        const string src = "move 0.3 0.4\nline 0.7 0.9\nraw 14\n";
+
+        var naplps = CompileBare(src, NaplpsSystemType.NAPLPS);
+        var telidon = CompileBare(src, NaplpsSystemType.Telidon);
+        var defaulted = CompileBare(src, null);
+
+        CollectionAssert.AreEqual(naplps, defaulted, "null system type must behave as NAPLPS");
+        CollectionAssert.AreNotEqual(naplps, telidon,
+            "Telidon's higher coordinate precision must change the bare encoding");
+    }
+
     [TestMethod]
     public void Compile_MoveAbsolute_EqualsHandBuilt()
     {
