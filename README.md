@@ -2,8 +2,6 @@
 
 A modern .NET 10 toolkit for the **North American Presentation Level Protocol Syntax**, <a href="docs/naplps_standard_-_ansi_x3.110-1983_smaller.pdf" target="_blank" rel="noopener">ANSI X3.110-1983</a>, with live-rendering examples from the historical corpus. Click any tile below to open the full-size APNG; each is a bit-identical render from a real `.nap` file in `Examples/`.
 
-### 🖼️ [**Browse the full visual corpus →**](https://telidraw.com/gallery/)
-
 All 372 renders in one gallery, with transport controls to scrub through the drawing sequence frame by frame, and before/after diffs for every recent change to the renderer. For background on the format, Prodigy, and Telidon, see the Wikipedia articles: [NAPLPS](https://en.wikipedia.org/wiki/NAPLPS), [Prodigy (online service)](https://en.wikipedia.org/wiki/Prodigy_(online_service)), [Telidon](https://en.wikipedia.org/wiki/Telidon). ⚠️WARNING:⚠️ These are various amazing rabbit holes, be warned! 🐇🕳️
 
 <table>
