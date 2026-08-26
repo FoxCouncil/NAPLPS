@@ -1,6 +1,6 @@
 ﻿# NAPLPS 📺✨
 
-A modern .NET 10 toolkit for the **North American Presentation Level Protocol Syntax**, <a href="docs/naplps_standard_-_ansi_x3.110-1983_smaller.pdf" target="_blank" rel="noopener">ANSI X3.110-1983</a>, with live-rendering examples from the historical corpus. Click any tile below to open the full-size APNG; each is a bit-identical render from a real `.nap` file in `Examples/`.
+A modern .NET 10 toolkit for the **North American Presentation Level Protocol Syntax**, <a href="https://telidraw.com/docs/naplps_standard_-_ansi_x3.110-1983_smaller.pdf" target="_blank" rel="noopener">ANSI X3.110-1983</a>, with live-rendering examples from the historical corpus. Click any tile below to open the full-size APNG; each is a bit-identical render from a real `.nap` file in `Examples/`.
 
 All 372 renders in one gallery, with transport controls to scrub through the drawing sequence frame by frame, and before/after diffs for every recent change to the renderer. For background on the format, Prodigy, and Telidon, see the Wikipedia articles: [NAPLPS](https://en.wikipedia.org/wiki/NAPLPS), [Prodigy (online service)](https://en.wikipedia.org/wiki/Prodigy_(online_service)), [Telidon](https://en.wikipedia.org/wiki/Telidon). ⚠️WARNING:⚠️ These are various amazing rabbit holes, be warned! 🐇🕳️
 
@@ -69,7 +69,7 @@ Toggle **View > Toolbox** to enter authoring mode. Toggle **View > Properties** 
 | [docs/tools.md](docs/tools.md) | 🔧 Developer workflow: running tests, visual regression workflow, AOT status, dev commands, native interop examples |
 | [tools/aot/README.md](tools/aot/README.md) | 🌐 Ten native interop demos (C, C++, Rust, Python, Node.js, Go, Zig, PHP, Ruby, Swift) that link against the AOT-published library |
 | [IDEAS.md](IDEAS.md) | 💡 Ideas and open TODOs |
-| [docs/](docs/) | 📚 Original source material: 1983 BYTE Magazine NAPLPS articles, <a href="docs/naplps_standard_-_ansi_x3.110-1983_smaller.pdf" target="_blank" rel="noopener">ANSI X3.110-1983</a> standard PDF |
+| [docs/](docs/) | 📚 Original source material: 1983 BYTE Magazine NAPLPS articles, <a href="https://telidraw.com/docs/naplps_standard_-_ansi_x3.110-1983_smaller.pdf" target="_blank" rel="noopener">ANSI X3.110-1983</a> standard PDF |
 
 ## Key invariants ✅
 

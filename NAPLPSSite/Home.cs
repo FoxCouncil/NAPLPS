@@ -17,9 +17,10 @@ public static class Home
     private const string RepoBlob = "https://github.com/FoxCouncil/NAPLPS/blob/main/";
     private const string RepoTree = "https://github.com/FoxCouncil/NAPLPS/tree/main/";
 
-    /// <summary>The standard itself. Not published to the site (it is 62 MB), so it points at
-    /// the copy in the repo.</summary>
-    private const string SpecPdf = RepoBlob + "docs/naplps_standard_-_ansi_x3.110-1983_smaller.pdf";
+    /// <summary>The standard itself, published next to the site so it opens in the browser's own
+    /// PDF viewer. GitHub's blob preview renders blank pages for a file this size (62 MB) and the
+    /// raw endpoint serves it as octet-stream, which forces a download instead.</summary>
+    private const string SpecPdf = "docs/naplps_standard_-_ansi_x3.110-1983_smaller.pdf";
 
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
         .UseAdvancedExtensions()
@@ -33,6 +34,16 @@ public static class Home
         {
             Console.WriteLine("home   : no README.md, skipped");
             return;
+        }
+
+        var specSource = Path.Combine(repoRoot, SpecPdf);
+
+        if (File.Exists(specSource))
+        {
+            var specTarget = Path.Combine(root, SpecPdf);
+            Directory.CreateDirectory(Path.GetDirectoryName(specTarget)!);
+            File.Copy(specSource, specTarget, overwrite: true);
+            Console.WriteLine($"spec   : {Html.Bytes(new FileInfo(specTarget).Length)} published to {SpecPdf}");
         }
 
         var markdown = File.ReadAllText(readmePath);
